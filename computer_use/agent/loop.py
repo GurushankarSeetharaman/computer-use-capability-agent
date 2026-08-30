@@ -62,6 +62,10 @@ How to work:
 - Use `extract` for every value the goal asks you to report, giving each a snake_case
   `output_name`. These become the named outputs of the reusable capability compiled from
   this run, so they are the point of the exercise, not bookkeeping.
+- Plain page content appears in the snapshot as `text content: "..."`. It has no
+  accessible name, so read it with `extract` using the `text` field, not role+name. Give
+  the stable label part ('Total:'), never the value you expect to read ('Total: $32.39') --
+  a locator containing today's value will not match tomorrow's.
 - Set `risk_level` honestly on every action. Anything that submits, pays, commits or
   deletes is `irreversible` and will stop for human approval.
 

@@ -147,6 +147,17 @@ class A11yNode(BaseModel):
     bounding_box: BoundingBox | None = None
 
     def describe(self) -> str:
+        """Render one node for the model.
+
+        A node with no accessible name is rendered as content rather than
+        with an "=" that reads like a name/value pair. That distinction is
+        load-bearing: the snapshot's `text` nodes carry their words in
+        `value`, and rendering them as though the words were a *name*
+        invites an addressing strategy -- get_by_role(name=...) -- that can
+        never match, because `text` is not an addressable ARIA role.
+        """
+        if self.name is None and self.value is not None:
+            return f"{self.role} content: {self.value!r}"
         parts = [self.role]
         if self.name:
             parts.append(repr(self.name))

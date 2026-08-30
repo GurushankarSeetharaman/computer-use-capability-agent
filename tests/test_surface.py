@@ -282,6 +282,27 @@ def test_snapshot_renders_compactly_for_the_model() -> None:
     assert "- button 'Login'" in rendered
 
 
+def test_a_nameless_content_node_renders_as_content_not_as_a_name() -> None:
+    """Rendering content with "=" invited an addressing strategy that cannot work.
+
+    The snapshot's `text` nodes carry their words in `value`. Shown as
+    `text = 'Total: $32.39'` the model read that as a name and addressed
+    it with role+name, which never matches because `text` is not an
+    addressable ARIA role.
+    """
+    snapshot = SurfaceSnapshot(
+        url="https://www.saucedemo.com/checkout-step-two.html",
+        title="Swag Labs",
+        nodes=[
+            {"role": "text", "value": "Total: $32.39"},
+            {"role": "textbox", "name": "Zip", "value": "12345"},
+        ],
+    )
+    rendered = snapshot.describe()
+    assert "- text content: 'Total: $32.39'" in rendered
+    assert "- textbox 'Zip' = '12345'" in rendered
+
+
 def test_surface_package_imports_without_playwright_installed() -> None:
     """The models must stay usable in an environment with no browser."""
     import computer_use.surface as surface

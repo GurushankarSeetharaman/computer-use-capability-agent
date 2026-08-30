@@ -24,6 +24,7 @@ from computer_use.surface.models import (
     Action,
     ActionType,
     Locator,
+    LocatorStrategy,
     RiskLevel,
     WaitCondition,
 )
@@ -106,22 +107,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "extract",
         "description": (
-            "Read text or a field value from an element. Use this for every value the "
-            "goal asks you to report back, so it can become a named output of the "
-            "resulting capability."
+            "Read text or a field value from the page. Use this for every value the goal "
+            "asks you to report back, so it becomes a named output of the resulting "
+            "capability. Two ways to say what to read: for a labelled control use "
+            "role+name; for plain page content -- anything the snapshot shows as "
+            "`text content: \"...\"` -- use `text`, because content nodes have no "
+            "accessible name to match on."
         ),
-        "input_schema": _target_schema(
-            {
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "Visible text identifying the content to read. Give the stable "
+                        "label part, not the value you expect to find: 'Total:' rather "
+                        "than 'Total: $32.39'. Matching is by substring, and a locator "
+                        "containing today's value stops matching the moment the value "
+                        "changes -- which is exactly what replay must survive."
+                    ),
+                },
+                **_TARGET_PROPERTIES,
+                "risk_level": _RISK_PROPERTY,
                 "output_name": {
                     "type": "string",
                     "description": (
                         "Snake_case name for this value in the capability's outputs, "
                         "e.g. cart_total."
                     ),
-                }
+                },
             },
-            required=["output_name"],
-        ),
+            "required": ["output_name"],
+        },
     },
     {
         "name": "wait_for",
@@ -223,12 +240,57 @@ class Decision:
         return self.tool_name == REPORT_STUCK
 
 
+#: Roles the snapshot reports that get_by_role cannot address. Playwright's
+#: ARIA snapshot emits `text` for plain content, but `text` is not an ARIA
+#: role -- addressing it by role+name always fails. Content like this is
+#: reachable by the text strategy instead, which design notes section 3
+#: already lists as a locator tier.
+PSEUDO_ROLES = frozenset({"text"})
+
+
 def _locator(payload: dict[str, Any]) -> Locator:
     return Locator.role_name(
         payload["role"],
         payload.get("name"),
         css_fallback=payload.get("css_fallback"),
     )
+
+
+def _text_locator(text: str, payload: dict[str, Any]) -> Locator:
+    css = payload.get("css_fallback")
+    return Locator(
+        strategy=LocatorStrategy.TEXT,
+        primary={"value": text},
+        fallbacks=[{"strategy": "css", "value": css}] if css else [],
+    )
+
+
+def _content_locator(payload: dict[str, Any]) -> Locator:
+    """Choose how to address the thing an extract is reading.
+
+    Explicit `text` wins. Failing that, a pseudo-role is translated to the
+    text strategy using whatever words came with it -- a translation, not a
+    repair: `text` has exactly one possible meaning, so nothing is being
+    guessed on the model's behalf. What is never done is silently building
+    a role+name locator for a role that cannot be addressed, which is how
+    this failed before: the run looked fine until the extract, and the
+    value it wanted was never sourced from a step at all.
+    """
+    text = payload.get("text")
+    role = payload.get("role")
+
+    if not text and role in PSEUDO_ROLES:
+        text = payload.get("name") or payload.get("value")
+        if not text:
+            raise ValueError(
+                f"role {role!r} cannot be addressed by role+name; pass 'text' with the "
+                "visible text to find"
+            )
+    if text:
+        return _text_locator(text, payload)
+    if not role:
+        raise ValueError("extract requires either 'text' or 'role'")
+    return _locator(payload)
 
 
 def _risk(payload: dict[str, Any]) -> RiskLevel:
@@ -268,6 +330,16 @@ def interpret(tool_name: str, payload: dict[str, Any], *, timeout_ms: int = 5000
 
     if action_type is ActionType.WAIT_FOR:
         return Decision(tool_name, payload, action=_wait_action(payload, common))
+
+    if action_type is ActionType.EXTRACT:
+        if not payload.get("output_name"):
+            raise ValueError("extract requires 'output_name'")
+        return Decision(
+            tool_name,
+            payload,
+            action=Action(locator=_content_locator(payload), **common),
+            output_name=payload["output_name"],
+        )
 
     if not payload.get("role"):
         raise ValueError(f"{tool_name} requires 'role'")

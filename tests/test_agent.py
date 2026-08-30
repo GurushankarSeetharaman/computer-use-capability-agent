@@ -27,6 +27,7 @@ from computer_use.surface.models import (
     Action,
     ActionResult,
     ActionType,
+    LocatorStrategy,
     RiskLevel,
     SurfaceSnapshot,
     WaitCondition,
@@ -158,8 +159,65 @@ def test_risk_level_defaults_to_safe_and_is_honoured_when_given() -> None:
 
 
 def test_extract_carries_the_output_name_for_the_compiler() -> None:
-    decision = interpret("extract", {"role": "text", "output_name": "cart_total"})
+    decision = interpret("extract", {"text": "Total:", "output_name": "cart_total"})
     assert decision.output_name == "cart_total"
+
+
+def test_extract_by_text_uses_the_text_locator_strategy() -> None:
+    """Content nodes have no accessible name to match on."""
+    decision = interpret("extract", {"text": "Total:", "output_name": "order_total"})
+    locator = decision.action.locator
+    assert locator.strategy is LocatorStrategy.TEXT
+    assert locator.tiers[0].value == "Total:"
+
+
+def test_extract_by_role_still_works_for_labelled_controls() -> None:
+    decision = interpret("extract", {"role": "textbox", "name": "Zip", "output_name": "zip"})
+    assert decision.action.locator.strategy is LocatorStrategy.ROLE_NAME
+
+
+def test_the_pseudo_role_that_broke_the_live_run_is_translated_not_failed() -> None:
+    """Regression: `extract role='text' name='Total: $32.39'` used to fail.
+
+    `text` is not an addressable ARIA role, so get_by_role could never
+    match it -- the run reached its goal but sourced no output from a
+    step. It is now translated to the text strategy, which section 3
+    already lists as a locator tier.
+    """
+    decision = interpret(
+        "extract",
+        {"role": "text", "name": "Total: $32.39", "output_name": "order_total"},
+    )
+    locator = decision.action.locator
+    assert locator.strategy is LocatorStrategy.TEXT
+    assert locator.tiers[0].value == "Total: $32.39"
+
+
+def test_a_pseudo_role_with_nothing_to_match_on_is_rejected() -> None:
+    with pytest.raises(ValueError, match="visible text"):
+        interpret("extract", {"role": "text", "output_name": "total"})
+
+
+def test_extract_needs_something_to_address_and_an_output_name() -> None:
+    with pytest.raises(ValueError, match="output_name"):
+        interpret("extract", {"text": "Total:"})
+    with pytest.raises(ValueError, match="'text' or 'role'"):
+        interpret("extract", {"output_name": "total"})
+
+
+def test_a_css_fallback_survives_onto_a_text_locator() -> None:
+    decision = interpret(
+        "extract",
+        {"text": "Total:", "css_fallback": ".summary_total_label", "output_name": "t"},
+    )
+    tiers = decision.action.locator.tiers
+    assert [tier.strategy for tier in tiers] == [LocatorStrategy.TEXT, LocatorStrategy.CSS]
+
+
+def test_extract_does_not_require_a_role_in_its_schema() -> None:
+    schema = next(t for t in TOOL_SCHEMAS if t["name"] == "extract")["input_schema"]
+    assert schema["required"] == ["output_name"]
+    assert "text" in schema["properties"]
 
 
 def test_wait_for_requires_the_field_its_condition_needs() -> None:
