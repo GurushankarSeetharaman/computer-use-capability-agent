@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtualenvs and secrets
+.venv/
+venv/
+env/
+.env
+
+# Playwright local state
+.playwright/
+
+# Generated run output.
+#
+# Both directories are produced by running the system, so they are ignored
+# wholesale -- except for examples/, which is committed on purpose so the
+# repo can be read end to end (artifact + evidence trail) without an API
+# key or a live browser. Note git cannot re-include a file inside an
+# excluded directory, hence un-ignoring the directory before its contents.
+artifacts/*
+!artifacts/examples/
+!artifacts/examples/**
+evidence/*
+!evidence/examples/
+!evidence/examples/**
