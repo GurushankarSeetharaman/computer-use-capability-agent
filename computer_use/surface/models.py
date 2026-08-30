@@ -9,6 +9,7 @@ tested without launching one.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -47,6 +48,17 @@ class LocatorSpec(BaseModel):
     name: str | None = None
     value: str | None = None
 
+    #: Treat `value` as a regular expression rather than a substring.
+    #:
+    #: Text matching is substring-based and case-insensitive, which cannot
+    #: always name one element: on a checkout summary, "Total:" matches
+    #: both "Total: $32.39" and "Item total: $29.99". An anchored pattern
+    #: -- ^Total: -- names exactly one, and does so without embedding the
+    #: value being read, so the locator still matches when the total
+    #: changes. That last property is why this exists rather than an
+    #: `exact` flag: exact matching would require naming today's value.
+    regex: bool = False
+
     @model_validator(mode="after")
     def _require_strategy_fields(self) -> LocatorSpec:
         if self.strategy is LocatorStrategy.ROLE_NAME:
@@ -54,13 +66,27 @@ class LocatorSpec(BaseModel):
                 raise ValueError("role+name locators require a 'role'")
         elif not self.value:
             raise ValueError(f"{self.strategy.value} locators require a 'value'")
+
+        if self.regex:
+            if self.strategy is not LocatorStrategy.TEXT:
+                raise ValueError(
+                    f"regex matching is only supported for text locators, "
+                    f"not {self.strategy.value}"
+                )
+            # Compiled here so a bad pattern fails when the artifact loads
+            # rather than at the step that uses it, mid-replay.
+            try:
+                re.compile(self.value or "")
+            except re.error as exc:
+                raise ValueError(f"invalid regex {self.value!r}: {exc}") from exc
         return self
 
     def describe(self) -> str:
         """Human-readable form, for logs and failure messages."""
         if self.strategy is LocatorStrategy.ROLE_NAME:
             return f"role={self.role!r} name={self.name!r}"
-        return f"{self.strategy.value}={self.value!r}"
+        operator = "~=" if self.regex else "="
+        return f"{self.strategy.value}{operator}{self.value!r}"
 
 
 class Locator(BaseModel):

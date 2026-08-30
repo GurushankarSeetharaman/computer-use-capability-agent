@@ -38,7 +38,7 @@ from computer_use.agent.tools import (
     interpret,
 )
 from computer_use.escalation import InterventionRequest, request_intervention
-from computer_use.surface.models import ActionResult, SurfaceSnapshot
+from computer_use.surface.models import ActionResult, SurfaceSnapshot, TierOutcome
 
 #: Named by the operator, not guessed. Sonnet 5 is capable enough to read an
 #: accessibility tree and pick the next action, and discovery is the only
@@ -66,6 +66,10 @@ How to work:
   accessible name, so read it with `extract` using the `text` field, not role+name. Give
   the stable label part ('Total:'), never the value you expect to read ('Total: $32.39') --
   a locator containing today's value will not match tomorrow's.
+- A locator must identify exactly ONE element. If an action is refused as ambiguous, that
+  is not a dead end: narrow it and try again. For text, set `text_regex` and anchor the
+  label ('^Total: '). For a control, add a `css_fallback`. Do not give up on a value the
+  goal asked for just because the first locator was too broad.
 - Set `risk_level` honestly on every action. Anything that submits, pays, commits or
   deletes is `irreversible` and will stop for human approval.
 
@@ -394,7 +398,17 @@ class DiscoveryAgent:
         if result.blocked:
             return f"REFUSED BY POLICY: {result.guardrail_reason}"
         if not result.succeeded:
-            return f"FAILED: {result.error}"
+            failure = f"FAILED: {result.error}"
+            # An ambiguous locator is recoverable, and the model is far more
+            # likely to recover if told how at the moment it happens rather
+            # than only in a system prompt it read many turns ago.
+            if any(a.outcome is TierOutcome.AMBIGUOUS for a in result.locator_attempts):
+                failure += (
+                    "\nThat locator matched several elements, so it named none of them. "
+                    "Narrow it and retry: for text, set text_regex and anchor the label "
+                    "(e.g. '^Total: '); for a control, add a css_fallback."
+                )
+            return failure
         body = f"OK ({decision.tool_name})"
         if result.extracted is not None:
             body += f"\nextracted {decision.output_name or 'value'}: {result.extracted!r}"

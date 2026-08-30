@@ -82,7 +82,11 @@ class FakePage:
     def get_by_role(self, role: str, **kwargs) -> _FakeHandle:
         return self._handle(("role", role, kwargs.get("name")))
 
-    def get_by_text(self, text: str, **kwargs) -> _FakeHandle:
+    def get_by_text(self, text, **kwargs) -> _FakeHandle:
+        # Compiled patterns are keyed by their source, so assertions stay
+        # readable and do not depend on re module caching identity.
+        if hasattr(text, "pattern"):
+            return self._handle(("regex", text.pattern))
         return self._handle(("text", text))
 
     def locator(self, selector: str, **kwargs) -> _FakeHandle:
@@ -400,3 +404,47 @@ def test_the_report_describes_the_whole_ladder() -> None:
     assert "ambiguous" in described
     assert "2 matches" in described
     assert "fallback_1" in described
+
+
+# -- regex text matching ---------------------------------------------------
+
+
+def test_a_regex_text_spec_compiles_the_pattern() -> None:
+    page = FakePage(resolvable={("regex", "^Total: "): 1})
+    spec = LocatorSpec(strategy=LocatorStrategy.TEXT, value="^Total: ", regex=True)
+
+    build_handle(page, spec)
+
+    assert page.calls == [("regex", "^Total: ")]
+
+
+def test_an_anchored_pattern_resolves_what_a_substring_could_not() -> None:
+    """The live failure: 'Total:' also matched 'Item total: $29.99'."""
+    ambiguous = Locator(strategy=LocatorStrategy.TEXT, primary={"value": "Total:"})
+    anchored = Locator(
+        strategy=LocatorStrategy.TEXT, primary={"value": "^Total: ", "regex": True}
+    )
+    page = FakePage(resolvable={("text", "Total:"): 2, ("regex", "^Total: "): 1})
+
+    assert not resolve(page, ambiguous, probe_timeout_ms=10).resolved
+    assert resolve(page, anchored, probe_timeout_ms=10).resolved
+
+
+def test_regex_is_rejected_on_strategies_that_cannot_use_it() -> None:
+    with pytest.raises(ValidationError):
+        LocatorSpec(strategy=LocatorStrategy.CSS, value="#total", regex=True)
+    with pytest.raises(ValidationError):
+        LocatorSpec(strategy=LocatorStrategy.ROLE_NAME, role="button", regex=True)
+
+
+def test_an_invalid_pattern_fails_when_the_locator_is_built() -> None:
+    """A bad pattern must not wait until mid-replay to announce itself."""
+    with pytest.raises(ValidationError):
+        LocatorSpec(strategy=LocatorStrategy.TEXT, value="^Total: [", regex=True)
+
+
+def test_a_regex_spec_describes_itself_distinguishably() -> None:
+    spec = LocatorSpec(strategy=LocatorStrategy.TEXT, value="^Total: ", regex=True)
+    plain = LocatorSpec(strategy=LocatorStrategy.TEXT, value="Total:")
+    assert spec.describe() == "text~='^Total: '"
+    assert plain.describe() == "text='Total:'"

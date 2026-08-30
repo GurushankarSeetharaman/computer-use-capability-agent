@@ -122,9 +122,21 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": (
                         "Visible text identifying the content to read. Give the stable "
                         "label part, not the value you expect to find: 'Total:' rather "
-                        "than 'Total: $32.39'. Matching is by substring, and a locator "
-                        "containing today's value stops matching the moment the value "
-                        "changes -- which is exactly what replay must survive."
+                        "than 'Total: $32.39'. Matching is by case-insensitive substring "
+                        "unless text_regex is set, and a locator containing today's value "
+                        "stops matching the moment the value changes -- which is exactly "
+                        "what replay must survive."
+                    ),
+                },
+                "text_regex": {
+                    "type": "boolean",
+                    "description": (
+                        "Treat `text` as a regular expression. Use this when a plain "
+                        "substring matches more than one line and the read is refused as "
+                        "ambiguous: on a checkout summary 'Total:' also matches "
+                        "'Item total: $29.99', while the anchored pattern '^Total: ' "
+                        "matches only the total. Anchor the label; never write the value "
+                        "into the pattern."
                     ),
                 },
                 **_TARGET_PROPERTIES,
@@ -258,9 +270,12 @@ def _locator(payload: dict[str, Any]) -> Locator:
 
 def _text_locator(text: str, payload: dict[str, Any]) -> Locator:
     css = payload.get("css_fallback")
+    primary: dict[str, Any] = {"value": text}
+    if payload.get("text_regex"):
+        primary["regex"] = True
     return Locator(
         strategy=LocatorStrategy.TEXT,
-        primary={"value": text},
+        primary=primary,
         fallbacks=[{"strategy": "css", "value": css}] if css else [],
     )
 

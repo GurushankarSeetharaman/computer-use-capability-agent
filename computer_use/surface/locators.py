@@ -20,6 +20,7 @@ broken.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -97,7 +98,9 @@ def build_handle(page: PageLike, spec: LocatorSpec) -> Any:
     if spec.strategy is LocatorStrategy.XPATH:
         return page.locator(f"xpath={spec.value}")
     if spec.strategy is LocatorStrategy.TEXT:
-        return page.get_by_text(spec.value)
+        # A compiled pattern is matched against the element's text; an
+        # anchored one can name a single line that a substring cannot.
+        return page.get_by_text(re.compile(spec.value) if spec.regex else spec.value)
     raise ValueError(f"unsupported locator strategy: {spec.strategy}")
 
 

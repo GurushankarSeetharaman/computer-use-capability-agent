@@ -438,3 +438,57 @@ def test_recording_round_trips_through_json() -> None:
     assert restored.run_id == result.recording.run_id
     assert len(restored.steps) == len(result.recording.steps)
     assert restored.outputs == {"cart_total": "$29.99"}
+
+
+def test_extract_can_ask_for_an_anchored_regex_match() -> None:
+    decision = interpret(
+        "extract", {"text": "^Total: ", "text_regex": True, "output_name": "order_total"}
+    )
+    spec = decision.action.locator.tiers[0]
+    assert spec.strategy is LocatorStrategy.TEXT
+    assert spec.regex is True
+    assert spec.value == "^Total: "
+
+
+def test_plain_text_extracts_stay_substring_matches() -> None:
+    spec = interpret("extract", {"text": "Total:", "output_name": "t"}).action.locator.tiers[0]
+    assert spec.regex is False
+
+
+def test_the_extract_tool_advertises_the_regex_escape_hatch() -> None:
+    schema = next(t for t in TOOL_SCHEMAS if t["name"] == "extract")["input_schema"]
+    assert "text_regex" in schema["properties"]
+
+
+def test_an_ambiguous_failure_tells_the_model_how_to_narrow_it() -> None:
+    """Guidance at the moment of failure, not only in a system prompt."""
+    from computer_use.surface.models import LocatorStrategy as LS
+    from computer_use.surface.models import TierAttempt, TierOutcome
+
+    surface = FakeSurface(
+        results=[
+            ActionResult(
+                action_type=ActionType.EXTRACT,
+                succeeded=False,
+                error="no tier uniquely matched",
+                locator_attempts=[
+                    TierAttempt(
+                        tier=0,
+                        label="primary",
+                        strategy=LS.TEXT,
+                        outcome=TierOutcome.AMBIGUOUS,
+                        matches=2,
+                    )
+                ],
+            )
+        ]
+    )
+    extract_call = FakeToolUse(name="extract", input={"text": "Total:", "output_name": "t"})
+    loop, _ = agent([FakeResponse([extract_call]), FakeResponse([DONE_CALL])], surface=surface)
+    loop.run("goal", "https://www.saucedemo.com")
+
+    sent = loop.client.messages.calls[-1]["messages"]
+    results = [m for m in sent if m["role"] == "user" and isinstance(m["content"], list)][-1]
+    text = results["content"][0]["content"]
+    assert "matched several elements" in text
+    assert "text_regex" in text
