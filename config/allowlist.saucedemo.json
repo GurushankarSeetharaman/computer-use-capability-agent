@@ -1,0 +1,21 @@
+{
+  "capability_id": "sauce_add_item_to_cart_checkout",
+  "allowed_base_urls": ["https://www.saucedemo.com"],
+  "allowed_routes": [
+    "/",
+    "/inventory.html",
+    "/inventory-item.html",
+    "/cart.html",
+    "/checkout-step-one.html",
+    "/checkout-step-two.html",
+    "/checkout-complete.html"
+  ],
+  "allowed_action_types": [
+    "navigate",
+    "click",
+    "type",
+    "select",
+    "extract",
+    "wait_for"
+  ]
+}

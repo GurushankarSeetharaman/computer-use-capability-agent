@@ -201,6 +201,26 @@ class WaitCondition(str, Enum):
     URL_CONTAINS = "url_contains"
 
 
+class RiskLevel(str, Enum):
+    """How much damage an action can do if it is wrong.
+
+    Graded per step rather than per capability (design notes section 2): a
+    single flow routinely mixes a dozen harmless reads with one button
+    press that charges a card, and a capability-level rating would have to
+    describe the whole thing by its worst step.
+
+    Defined here, next to Action, because risk is a property of the action
+    itself -- the guardrail is merely the thing that reads it. Putting it
+    in the guardrail package instead would make the surface depend on the
+    policy layer, inverting the direction that keeps policy testable in
+    isolation.
+    """
+
+    SAFE = "safe"
+    REVERSIBLE = "reversible"
+    IRREVERSIBLE = "irreversible"
+
+
 class Action(BaseModel):
     """One thing to do to the page.
 
@@ -218,6 +238,20 @@ class Action(BaseModel):
     value: str | None = None
     condition: WaitCondition | None = None
     timeout_ms: int = Field(default=5000, gt=0)
+
+    #: Defaults to safe because most actions are, and because the guardrail
+    #: cannot infer intent from an action's shape -- a click on "Cancel" and
+    #: a click on "Place order" are the same object. The consequence is that
+    #: irreversible steps must be marked by whoever authors them (Claude
+    #: during discovery, the compiler when writing an artifact), and an
+    #: unmarked destructive step is this system's sharpest edge. Named as a
+    #: limitation in design notes section 6 rather than papered over with a
+    #: keyword heuristic that would give false confidence.
+    risk_level: RiskLevel = RiskLevel.SAFE
+
+    #: Pre-approval for an irreversible action. Without it, an irreversible
+    #: action escalates to a human instead of executing.
+    approved: bool = False
 
     @model_validator(mode="after")
     def _require_fields_for_type(self) -> Action:

@@ -24,6 +24,7 @@ set out in [docs/CLAUDE_CODE_PROMPTS.md](docs/CLAUDE_CODE_PROMPTS.md).
 | `computer_use/guardrail/` | Allowlist + risk checks; pure policy, no I/O |
 | `computer_use/escalation/` | Pause, hand the live session to a human, resume |
 | `computer_use/evidence/` | Structured JSONL logs, screenshots, redaction |
+| `config/` | Per-capability allowlist policy files (JSON) |
 | `artifacts/` | Generated capability JSON (gitignored except `examples/`) |
 | `evidence/` | Generated run logs and screenshots (gitignored except `examples/`) |
 
