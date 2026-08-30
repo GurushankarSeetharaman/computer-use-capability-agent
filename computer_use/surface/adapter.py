@@ -21,6 +21,7 @@ from typing import Any
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from computer_use.guardrail import AllowlistConfig, Guardrail
 from computer_use.surface.aria import AriaEntry, parse_aria_snapshot
 from computer_use.surface.locators import Resolution, describe_tiers, resolve
 from computer_use.surface.models import (
@@ -83,6 +84,11 @@ class SurfaceNotStarted(RuntimeError):
 class PlaywrightSurface:
     """A live browser page, addressed through perceive() and act().
 
+    A surface is bound to an allowlist at construction and enforces it on
+    every act(). perceive() is deliberately not gated: looking at a page
+    changes nothing, and a policy that could block observation would blind
+    the evidence trail exactly when a run is going wrong.
+
     Use as a context manager. The browser context is exposed deliberately:
     escalation hands a human the *same* context rather than opening a new
     one (design notes section 5), so nothing here may close it implicitly.
@@ -92,12 +98,18 @@ class PlaywrightSurface:
     def __init__(
         self,
         *,
+        allowlist: AllowlistConfig,
         headless: bool = True,
         screenshot_dir: Path | str = Path("evidence/_surface"),
         probe_timeout_ms: int = 2000,
         capture_bounding_boxes: bool = True,
         max_nodes: int = 200,
     ) -> None:
+        #: Required, with no default. There is no way to construct a surface
+        #: without a policy, which is the point: design notes section 6 asks
+        #: for one enforcement point rather than two, and a check every
+        #: caller is merely supposed to remember is not an enforcement point.
+        self.allowlist = allowlist
         self.headless = headless
         self.screenshot_dir = Path(screenshot_dir)
         self.probe_timeout_ms = probe_timeout_ms
@@ -226,13 +238,32 @@ class PlaywrightSurface:
     # -- act ---------------------------------------------------------------
 
     def act(self, action: Action) -> ActionResult:
-        """Execute one action, reporting which locator tier got there.
+        """Check one action against policy, then execute it if permitted.
 
-        Failures come back as an unsuccessful ActionResult rather than an
-        exception; see the ActionResult docstring for why that choice
-        belongs to the caller and not to this layer.
+        The guardrail runs here, inside the only method that can reach the
+        page, so no caller can skip it -- discovery and replay get the same
+        enforcement without either of them being trusted to ask for it
+        (design notes section 6). A refused action returns a result flagged
+        ``blocked`` and never touches the browser.
+
+        Execution failures also come back as an unsuccessful ActionResult
+        rather than an exception; see the ActionResult docstring for why
+        that judgement belongs to the caller and not to this layer.
         """
         started = time.monotonic()
+
+        verdict = Guardrail.check(
+            action, self.allowlist, current_url=self._current_url()
+        )
+        if not verdict.allowed:
+            return ActionResult.blocked_by_guardrail(
+                action,
+                reason=verdict.reason,
+                needs_escalation=verdict.needs_escalation,
+                url=verdict.checked_url,
+                duration_ms=self._elapsed_ms(started),
+            )
+
         try:
             resolution, extracted = self._perform(action)
         except Exception as exc:

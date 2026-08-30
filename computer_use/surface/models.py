@@ -312,6 +312,18 @@ class ActionResult(BaseModel):
     error: str | None = None
     duration_ms: int = 0
 
+    #: True when policy refused the action, as opposed to the action being
+    #: attempted and failing. The distinction matters to every caller: a
+    #: failure may be worth retrying, a refusal never is.
+    blocked: bool = False
+
+    #: True when the refusal was "a human must decide", not "this is out of
+    #: bounds". Recorded as plain booleans rather than the guardrail's
+    #: Decision enum on purpose -- importing it here would make the surface
+    #: models depend on the policy package that already depends on them.
+    needs_escalation: bool = False
+    guardrail_reason: str | None = None
+
     @classmethod
     def failure(
         cls, action: Action, error: str, *, duration_ms: int = 0, **extra: Any
@@ -323,4 +335,26 @@ class ActionResult(BaseModel):
             error=error,
             duration_ms=duration_ms,
             **extra,
+        )
+
+    @classmethod
+    def blocked_by_guardrail(
+        cls,
+        action: Action,
+        *,
+        reason: str,
+        needs_escalation: bool,
+        url: str | None = None,
+        duration_ms: int = 0,
+    ) -> ActionResult:
+        """Build the result for an action policy refused to let run."""
+        return cls(
+            action_type=action.type,
+            succeeded=False,
+            blocked=True,
+            needs_escalation=needs_escalation,
+            guardrail_reason=reason,
+            error=f"blocked by guardrail: {reason}",
+            url=url,
+            duration_ms=duration_ms,
         )

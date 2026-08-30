@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from computer_use.guardrail import AllowlistConfig  # noqa: E402
 from computer_use.surface import (  # noqa: E402
     Action,
     ActionType,
@@ -36,6 +37,7 @@ from computer_use.surface import (  # noqa: E402
 )
 
 TARGET = "https://www.saucedemo.com"
+ALLOWLIST = Path("config/allowlist.saucedemo.json")
 
 
 def show_snapshot(label: str, snapshot) -> None:
@@ -64,6 +66,7 @@ def main() -> int:
     args = parser.parse_args()
 
     with PlaywrightSurface(
+        allowlist=AllowlistConfig.from_file(ALLOWLIST),
         headless=not args.headed,
         screenshot_dir=Path("evidence/_scratch"),
     ) as surface:
