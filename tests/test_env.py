@@ -134,3 +134,38 @@ def test_importing_the_package_does_not_load_the_environment() -> None:
 def test_repo_root_points_at_the_project(tmp_path: Path) -> None:
     assert (env_module.REPO_ROOT / "computer_use").is_dir()
     assert (env_module.REPO_ROOT / "requirements.txt").is_file()
+
+
+# -- workspace id ----------------------------------------------------------
+
+
+def test_workspace_id_is_absent_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from computer_use.env import WORKSPACE_ID_VAR, client_headers, workspace_id
+
+    monkeypatch.delenv(WORKSPACE_ID_VAR, raising=False)
+    assert workspace_id() is None
+    assert client_headers() == {}
+
+
+def test_workspace_id_becomes_a_request_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identity-linked keys are rejected with a 400 without it."""
+    from computer_use.env import WORKSPACE_HEADER, WORKSPACE_ID_VAR, client_headers
+
+    monkeypatch.setenv(WORKSPACE_ID_VAR, "wrkspc_example")
+    assert client_headers() == {WORKSPACE_HEADER: "wrkspc_example"}
+
+
+def test_blank_workspace_id_counts_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from computer_use.env import WORKSPACE_ID_VAR, client_headers
+
+    monkeypatch.setenv(WORKSPACE_ID_VAR, "  ")
+    assert client_headers() == {}
+
+
+def test_workspace_id_is_printed_because_it_is_not_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from computer_use.env import WORKSPACE_ID_VAR, describe_workspace_id
+
+    monkeypatch.setenv(WORKSPACE_ID_VAR, "wrkspc_example")
+    assert "wrkspc_example" in describe_workspace_id()

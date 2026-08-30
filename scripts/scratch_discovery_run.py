@@ -18,10 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import anthropic  # noqa: E402
-
 from computer_use.agent import DEFAULT_MODEL, DiscoveryAgent, StepOutcome  # noqa: E402
-from computer_use.env import describe_api_key, has_api_key, load_environment  # noqa: E402
+from computer_use.agent.client import build_client, explain_api_error  # noqa: E402
+from computer_use.env import (  # noqa: E402
+    describe_api_key,
+    describe_workspace_id,
+    has_api_key,
+    load_environment,
+)
 from computer_use.guardrail import AllowlistConfig  # noqa: E402
 from computer_use.surface import PlaywrightSurface  # noqa: E402
 
@@ -49,6 +53,7 @@ def main() -> int:
     loaded = load_environment()
     print(f"env file : {loaded or 'none found (using exported variables)'}")
     print(f"api key  : {describe_api_key()}")
+    print(f"workspace: {describe_workspace_id()}")
     if not has_api_key():
         print(
             "\nThe discovery loop needs an API key. Put ANTHROPIC_API_KEY in the "
@@ -70,11 +75,18 @@ def main() -> int:
 
         agent = DiscoveryAgent(
             surface,
-            client=anthropic.Anthropic(),
+            client=build_client(),
             model=args.model,
             max_steps=args.max_steps,
         )
-        result = agent.run(args.goal, TARGET)
+        try:
+            result = agent.run(args.goal, TARGET)
+        except Exception as error:  # surfaced, not swallowed
+            hint = explain_api_error(error)
+            if hint is None:
+                raise
+            print(f"\n{error}\n\n{hint}", file=sys.stderr)
+            return 2
 
     print(f"\noutcome : {result.outcome.value}")
     print(f"summary : {result.summary or '-'}")

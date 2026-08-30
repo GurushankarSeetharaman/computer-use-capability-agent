@@ -31,6 +31,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 
+#: Identity-linked API keys must name the workspace each request acts in;
+#: the API rejects them with a 400 otherwise. Not a secret -- it is an
+#: identifier, so unlike the key it is safe to print when diagnosing setup.
+WORKSPACE_ID_VAR = "ANTHROPIC_WORKSPACE_ID"
+
+#: The header the API expects the workspace identifier on.
+WORKSPACE_HEADER = "anthropic-workspace-id"
+
 
 def load_environment(path: Path | str | None = None, *, override: bool = False) -> Path | None:
     """Load a .env file into the process environment.
@@ -61,6 +69,30 @@ def describe_api_key() -> str:
     if not value.strip():
         return f"{API_KEY_VAR}: not set"
     return f"{API_KEY_VAR}: set ({len(value)} characters)"
+
+
+def workspace_id() -> str | None:
+    """The configured workspace identifier, if any."""
+    return os.environ.get(WORKSPACE_ID_VAR, "").strip() or None
+
+
+def describe_workspace_id() -> str:
+    """Presence and value -- a workspace id is an identifier, not a credential."""
+    current = workspace_id()
+    return f"{WORKSPACE_ID_VAR}: {current}" if current else f"{WORKSPACE_ID_VAR}: not set"
+
+
+def client_headers() -> dict[str, str]:
+    """Extra headers every request needs, given the current configuration.
+
+    Empty for an ordinary API key. An identity-linked key additionally has
+    to say which workspace it is acting in, and the API returns a 400 -- not
+    a 401 -- when it does not, which reads like a malformed request rather
+    than a configuration gap. Supplying it here keeps that distinction out
+    of every call site.
+    """
+    current = workspace_id()
+    return {WORKSPACE_HEADER: current} if current else {}
 
 
 def require_api_key() -> str:
