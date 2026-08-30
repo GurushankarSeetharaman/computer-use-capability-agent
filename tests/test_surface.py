@@ -23,6 +23,7 @@ from computer_use.surface.models import (
     LocatorSpec,
     LocatorStrategy,
     SurfaceSnapshot,
+    TierOutcome,
     WaitCondition,
     tier_label,
 )
@@ -32,31 +33,43 @@ from computer_use.surface.models import (
 
 
 class _FakeHandle:
-    """Stands in for a Playwright locator handle."""
+    """Stands in for a Playwright locator handle.
 
-    def __init__(self, key: tuple, resolvable: set[tuple]) -> None:
+    Models a match *count*, not just presence, because "matched more than
+    one element" is now a distinct outcome from "matched nothing".
+    """
+
+    def __init__(self, key: tuple, counts: dict[tuple, int]) -> None:
         self.key = key
-        self._resolvable = resolvable
+        self._counts = counts
 
     @property
     def first(self) -> "_FakeHandle":
         return self
 
     def wait_for(self, state: str | None = None, timeout: int | None = None) -> None:
-        if self.key not in self._resolvable:
+        if self._counts.get(self.key, 0) < 1:
             raise TimeoutError(f"nothing matched {self.key}")
+
+    def count(self) -> int:
+        return self._counts.get(self.key, 0)
 
 
 class FakePage:
-    """A page where the caller declares exactly what exists.
+    """A page where the caller declares exactly what exists, and how many.
 
-    `raising` models a tier that is malformed rather than merely absent --
-    an unknown ARIA role, say, which real Playwright rejects when the
-    locator is built rather than when it is awaited.
+    `resolvable` may be a set (each key matches exactly one element) or a
+    dict of key -> match count, for testing ambiguity. `raising` models a
+    tier that is malformed rather than merely absent -- an unknown ARIA
+    role, say, which real Playwright rejects when the locator is built
+    rather than when it is awaited.
     """
 
-    def __init__(self, resolvable: set[tuple] = frozenset(), raising: set[tuple] = frozenset()):
-        self._resolvable = set(resolvable)
+    def __init__(self, resolvable=frozenset(), raising: set[tuple] = frozenset()):
+        if isinstance(resolvable, dict):
+            self._counts = dict(resolvable)
+        else:
+            self._counts = {key: 1 for key in resolvable}
         self._raising = set(raising)
         self.calls: list[tuple] = []
 
@@ -64,7 +77,7 @@ class FakePage:
         self.calls.append(key)
         if key in self._raising:
             raise ValueError(f"malformed locator: {key}")
-        return _FakeHandle(key, self._resolvable)
+        return _FakeHandle(key, self._counts)
 
     def get_by_role(self, role: str, **kwargs) -> _FakeHandle:
         return self._handle(("role", role, kwargs.get("name")))
@@ -154,11 +167,11 @@ def test_resolve_prefers_the_primary_tier() -> None:
     page = FakePage(resolvable={("role", "button", "Login"), ("selector", "#login-button")})
     locator = Locator.role_name("button", "Login", css_fallback="#login-button")
 
-    resolution = resolve(page, locator, probe_timeout_ms=10)
+    report = resolve(page, locator, probe_timeout_ms=10)
 
-    assert resolution is not None
-    assert resolution.tier == 0
-    assert resolution.spec.strategy is LocatorStrategy.ROLE_NAME
+    assert report.resolved
+    assert report.resolution.tier == 0
+    assert report.resolution.spec.strategy is LocatorStrategy.ROLE_NAME
     assert page.calls == [("role", "button", "Login")], "fallbacks must not be probed"
 
 
@@ -167,18 +180,18 @@ def test_resolve_falls_through_and_reports_the_tier_that_won() -> None:
     page = FakePage(resolvable={("selector", "#login-button")})
     locator = Locator.role_name("button", "Login", css_fallback="#login-button")
 
-    resolution = resolve(page, locator, probe_timeout_ms=10)
+    report = resolve(page, locator, probe_timeout_ms=10)
 
-    assert resolution is not None
-    assert resolution.tier == 1
-    assert tier_label(resolution.tier) == "fallback_1"
-    assert resolution.spec.value == "#login-button"
+    assert report.resolved
+    assert report.resolution.tier == 1
+    assert tier_label(report.resolution.tier) == "fallback_1"
+    assert report.resolution.spec.value == "#login-button"
 
 
 def test_resolve_returns_none_when_no_tier_matches() -> None:
     page = FakePage()
     locator = Locator.role_name("button", "Login", css_fallback="#login-button")
-    assert resolve(page, locator, probe_timeout_ms=10) is None
+    assert not resolve(page, locator, probe_timeout_ms=10).resolved
 
 
 def test_a_malformed_tier_costs_only_that_tier() -> None:
@@ -193,10 +206,10 @@ def test_a_malformed_tier_costs_only_that_tier() -> None:
         fallbacks=[{"strategy": "css", "value": "#login-button"}],
     )
 
-    resolution = resolve(page, locator, probe_timeout_ms=10)
+    report = resolve(page, locator, probe_timeout_ms=10)
 
-    assert resolution is not None
-    assert resolution.tier == 1
+    assert report.resolved
+    assert report.resolution.tier == 1
 
 
 def test_describe_tiers_lists_every_attempt() -> None:
@@ -309,3 +322,81 @@ def test_surface_package_imports_without_playwright_installed() -> None:
 
     assert surface.Action is Action
     assert surface.__doc__
+
+
+# -- ambiguity -------------------------------------------------------------
+
+
+def test_a_tier_matching_several_elements_does_not_resolve() -> None:
+    """The live bug: get_by_text('Total:') matched the item subtotal too.
+
+    Taking .first returned a plausible wrong value with no error, which is
+    worse than failing: replay would depend on document order.
+    """
+    page = FakePage(resolvable={("text", "Total:"): 2})
+    locator = Locator(strategy=LocatorStrategy.TEXT, primary={"value": "Total:"})
+
+    report = resolve(page, locator, probe_timeout_ms=10)
+
+    assert not report.resolved
+    assert [a.outcome for a in report.attempts] == [TierOutcome.AMBIGUOUS]
+    assert report.attempts[0].matches == 2
+
+
+def test_ambiguity_falls_through_to_the_next_tier() -> None:
+    page = FakePage(resolvable={("role", "button", "Total"): 3, ("selector", "#total"): 1})
+    locator = Locator.role_name("button", "Total", css_fallback="#total")
+
+    report = resolve(page, locator, probe_timeout_ms=10)
+
+    assert report.resolved
+    assert report.resolution.tier == 1
+    assert [a.outcome for a in report.attempts] == [
+        TierOutcome.AMBIGUOUS,
+        TierOutcome.MATCHED,
+    ]
+
+
+def test_every_attempt_is_recorded_even_on_success() -> None:
+    """The drift signal lives in the tiers that failed on the way."""
+    page = FakePage(resolvable={("role", "button", "Login"): 4, ("selector", "#login"): 1})
+    locator = Locator.role_name("button", "Login", css_fallback="#login")
+
+    report = resolve(page, locator, probe_timeout_ms=10)
+
+    assert len(report.attempts) == 2
+    assert len(report.ambiguous) == 1
+    assert report.ambiguous[0].label == "primary"
+    assert report.ambiguous[0].matches == 4
+
+
+def test_a_tier_that_cannot_be_counted_is_treated_as_failed() -> None:
+    """Unable to prove uniqueness is not the same as proven unique."""
+
+    class Uncountable(_FakeHandle):
+        def count(self):
+            raise RuntimeError("cannot count")
+
+    class UncountablePage(FakePage):
+        def _handle(self, key):
+            self.calls.append(key)
+            return Uncountable(key, {key: 1})
+
+    locator = Locator(strategy=LocatorStrategy.CSS, primary={"value": "#x"})
+    report = resolve(UncountablePage(), locator, probe_timeout_ms=10)
+
+    assert not report.resolved
+    assert report.attempts[0].outcome is TierOutcome.ERROR
+
+
+def test_the_report_describes_the_whole_ladder() -> None:
+    """This text is what the agent sees, so it must say *why* each tier lost."""
+    page = FakePage(resolvable={("role", "button", "Total"): 2})
+    locator = Locator.role_name("button", "Total", css_fallback="#total")
+
+    described = resolve(page, locator, probe_timeout_ms=10).describe()
+
+    assert "primary" in described
+    assert "ambiguous" in described
+    assert "2 matches" in described
+    assert "fallback_1" in described

@@ -113,6 +113,42 @@ class Locator(BaseModel):
         )
 
 
+class TierOutcome(str, Enum):
+    """What happened when one locator tier was tried.
+
+    ``ambiguous`` is the interesting one. A tier that matches several
+    elements has not identified anything -- resolving it by position would
+    make replay depend on document order, which is precisely the kind of
+    incidental detail a capability is supposed to survive.
+    """
+
+    MATCHED = "matched"
+    AMBIGUOUS = "ambiguous"
+    NO_MATCH = "no_match"
+    ERROR = "error"
+
+
+class TierAttempt(BaseModel):
+    """One tier's result, kept so the evidence log can show the whole ladder.
+
+    Recording every attempt rather than only the winner is what turns
+    locator resolution into the drift signal of design notes section 4: a
+    capability whose primary tier starts coming back ambiguous is telling
+    you the target app grew a second element with the same name, which is
+    a different -- and earlier -- warning than the tier failing outright.
+    """
+
+    tier: int
+    label: str
+    strategy: LocatorStrategy
+    outcome: TierOutcome
+    matches: int | None = None
+
+    def describe(self) -> str:
+        detail = f" ({self.matches} matches)" if self.matches is not None else ""
+        return f"{self.label}[{self.strategy.value}]={self.outcome.value}{detail}"
+
+
 def tier_label(index: int) -> str:
     """Name a tier for the evidence log: 0 is primary, the rest fall back.
 
@@ -318,6 +354,9 @@ class ActionResult(BaseModel):
     locator_tier_label: str | None = None
     locator_strategy: LocatorStrategy | None = None
     tiers_attempted: int = 0
+
+    #: Every tier that was tried, in order, with what each one found.
+    locator_attempts: list[TierAttempt] = Field(default_factory=list)
     extracted: str | None = None
     url: str | None = None
     error: str | None = None

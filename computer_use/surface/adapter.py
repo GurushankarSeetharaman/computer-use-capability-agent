@@ -23,7 +23,7 @@ from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from computer_use.guardrail import AllowlistConfig, Guardrail
 from computer_use.surface.aria import AriaEntry, parse_aria_snapshot
-from computer_use.surface.locators import Resolution, describe_tiers, resolve
+from computer_use.surface.locators import ResolutionReport, resolve
 from computer_use.surface.models import (
     A11yNode,
     Action,
@@ -74,7 +74,17 @@ ADDRESSABLE_ROLES = INTERACTIVE_ROLES | {"alert", "heading", "img", "status"}
 
 
 class LocatorNotFound(RuntimeError):
-    """No tier of a locator matched anything on the page."""
+    """No tier of a locator identified exactly one element.
+
+    Carries the report so callers can log which tiers were *ambiguous*
+    rather than merely absent. The two say different things about how the
+    target application changed, and only one of them means "your locator
+    is now underspecified".
+    """
+
+    def __init__(self, message: str, report: ResolutionReport) -> None:
+        super().__init__(message)
+        self.report = report
 
 
 class SurfaceNotStarted(RuntimeError):
@@ -265,7 +275,18 @@ class PlaywrightSurface:
             )
 
         try:
-            resolution, extracted = self._perform(action)
+            report, extracted = self._perform(action)
+        except LocatorNotFound as exc:
+            # Keeps the whole ladder, so an ambiguous tier reaches the
+            # evidence log even when nothing resolved at all.
+            return ActionResult.failure(
+                action,
+                error=str(exc),
+                duration_ms=self._elapsed_ms(started),
+                url=self._current_url(),
+                locator_attempts=exc.report.attempts,
+                tiers_attempted=len(exc.report.attempts),
+            )
         except Exception as exc:
             return ActionResult.failure(
                 action,
@@ -273,20 +294,24 @@ class PlaywrightSurface:
                 duration_ms=self._elapsed_ms(started),
                 url=self._current_url(),
             )
+
+        resolution = report.resolution if report else None
+        attempts = report.attempts if report else []
         return ActionResult(
             action_type=action.type,
             succeeded=True,
             locator_tier=resolution.tier if resolution else None,
             locator_tier_label=tier_label(resolution.tier) if resolution else None,
             locator_strategy=resolution.spec.strategy if resolution else None,
-            tiers_attempted=(resolution.tier + 1) if resolution else 0,
+            tiers_attempted=len(attempts),
+            locator_attempts=attempts,
             extracted=extracted,
             url=self._current_url(),
             duration_ms=self._elapsed_ms(started),
         )
 
-    def _perform(self, action: Action) -> tuple[Resolution | None, str | None]:
-        """Dispatch one action. Returns (resolution, extracted text)."""
+    def _perform(self, action: Action) -> tuple[ResolutionReport | None, str | None]:
+        """Dispatch one action. Returns (resolution report, extracted text)."""
         if action.type is ActionType.NAVIGATE:
             self.page.goto(
                 action.url, timeout=action.timeout_ms, wait_until="domcontentloaded"
@@ -295,51 +320,58 @@ class PlaywrightSurface:
         if action.type is ActionType.WAIT_FOR:
             return self._wait_for(action), None
 
-        resolution = self._require(action)
+        report = self._require(action)
+        handle = report.resolution.handle
         if action.type is ActionType.CLICK:
-            resolution.handle.click(timeout=action.timeout_ms)
-            return resolution, None
+            handle.click(timeout=action.timeout_ms)
+            return report, None
         if action.type is ActionType.TYPE:
             # fill() rather than type(): it clears first and sets the value in
             # one step, so a replayed step cannot append to a field that a
             # previous attempt left populated.
-            resolution.handle.fill(action.value, timeout=action.timeout_ms)
-            return resolution, None
+            handle.fill(action.value, timeout=action.timeout_ms)
+            return report, None
         if action.type is ActionType.SELECT:
-            resolution.handle.select_option(action.value, timeout=action.timeout_ms)
-            return resolution, None
+            handle.select_option(action.value, timeout=action.timeout_ms)
+            return report, None
         if action.type is ActionType.EXTRACT:
-            return resolution, self._read(resolution, action.timeout_ms)
+            return report, self._read(handle, action.timeout_ms)
         raise ValueError(f"unsupported action type: {action.type}")
 
-    def _require(self, action: Action) -> Resolution:
-        """Resolve an action's locator or fail with every tier that was tried."""
-        resolution = resolve(
-            self.page, action.locator, probe_timeout_ms=self.probe_timeout_ms
-        )
-        if resolution is None:
-            raise LocatorNotFound(
-                f"no tier matched for {action.type.value}: {describe_tiers(action.locator)}"
-            )
-        return resolution
+    def _require(self, action: Action) -> ResolutionReport:
+        """Resolve an action's locator, or fail describing every tier tried.
 
-    def _read(self, resolution: Resolution, timeout_ms: int) -> str:
+        The message reports each tier's outcome rather than just listing
+        the tiers, so an underspecified locator reads as "matched 3
+        elements" instead of a generic miss. That text is also what the
+        discovery agent sees, which is what lets it narrow the locator on
+        the next turn instead of retrying the same thing.
+        """
+        report = resolve(self.page, action.locator, probe_timeout_ms=self.probe_timeout_ms)
+        if not report.resolved:
+            raise LocatorNotFound(
+                f"no tier uniquely matched for {action.type.value}: {report.describe()}",
+                report,
+            )
+        return report
+
+    def _read(self, handle: Any, timeout_ms: int) -> str:
         """Read a value from a form control, or text from anything else.
 
         Tried in that order because input_value() is the only one that sees
         what a user typed; inner_text() on a filled input returns nothing.
         """
         try:
-            return resolution.handle.input_value(timeout=timeout_ms)
+            return handle.input_value(timeout=timeout_ms)
         except Exception:
-            return resolution.handle.inner_text(timeout=timeout_ms)
+            return handle.inner_text(timeout=timeout_ms)
 
-    def _wait_for(self, action: Action) -> Resolution | None:
+    def _wait_for(self, action: Action) -> ResolutionReport | None:
         """Wait on a bounded condition. Never a bare sleep."""
         if action.condition is WaitCondition.VISIBLE:
-            resolution = self._require(action)
-            resolution.handle.wait_for(state="visible", timeout=action.timeout_ms)
-            return resolution
+            report = self._require(action)
+            report.resolution.handle.wait_for(state="visible", timeout=action.timeout_ms)
+            return report
         if action.condition is WaitCondition.TEXT_PRESENT:
             self.page.get_by_text(action.value).first.wait_for(
                 state="visible", timeout=action.timeout_ms

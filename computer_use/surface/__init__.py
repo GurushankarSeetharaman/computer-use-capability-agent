@@ -18,7 +18,13 @@ installed. Importing the name pulls Playwright in at that moment.
 
 from typing import Any
 
-from computer_use.surface.locators import Resolution, build_handle, describe_tiers, resolve
+from computer_use.surface.locators import (
+    Resolution,
+    ResolutionReport,
+    build_handle,
+    describe_tiers,
+    resolve,
+)
 from computer_use.surface.models import (
     A11yNode,
     Action,
@@ -30,6 +36,8 @@ from computer_use.surface.models import (
     LocatorStrategy,
     RiskLevel,
     SurfaceSnapshot,
+    TierAttempt,
+    TierOutcome,
     WaitCondition,
     tier_label,
 )
@@ -46,8 +54,11 @@ __all__ = [
     "LocatorStrategy",
     "PlaywrightSurface",
     "Resolution",
+    "ResolutionReport",
     "RiskLevel",
     "SurfaceSnapshot",
+    "TierAttempt",
+    "TierOutcome",
     "WaitCondition",
     "build_handle",
     "describe_tiers",
