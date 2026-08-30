@@ -8,4 +8,5 @@
 playwright>=1.62,<2      # browser control; the only thing surface/ imports
 anthropic>=1.2,<2        # Claude API client for the discovery loop (1.x; 0.x has a different surface)
 pydantic>=2.13,<3        # schema + validation for the artifact and result contracts (v2 API)
+python-dotenv>=1.0,<2    # load ANTHROPIC_API_KEY from a local .env at entry points
 pytest>=8.4,<10           # tests (floor set to what runs locally today; 9.x is current)

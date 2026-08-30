@@ -13,7 +13,6 @@ has something to consume in the next build step.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -22,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import anthropic  # noqa: E402
 
 from computer_use.agent import DEFAULT_MODEL, DiscoveryAgent, StepOutcome  # noqa: E402
+from computer_use.env import describe_api_key, has_api_key, load_environment  # noqa: E402
 from computer_use.guardrail import AllowlistConfig  # noqa: E402
 from computer_use.surface import PlaywrightSurface  # noqa: E402
 
@@ -46,8 +46,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("ANTHROPIC_API_KEY is not set; the discovery loop needs it.", file=sys.stderr)
+    loaded = load_environment()
+    print(f"env file : {loaded or 'none found (using exported variables)'}")
+    print(f"api key  : {describe_api_key()}")
+    if not has_api_key():
+        print(
+            "\nThe discovery loop needs an API key. Put ANTHROPIC_API_KEY in the "
+            ".env file at the repo root, or export it.",
+            file=sys.stderr,
+        )
         return 2
 
     allowlist = AllowlistConfig.from_file(Path("config/allowlist.saucedemo.json"))

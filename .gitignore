@@ -9,6 +9,10 @@ __pycache__/
 venv/
 env/
 .env
+# Every .env variant, not just the exact name: a file saved as ".env.txt"
+# by a Windows editor is not matched by ".env" and would be committed.
+.env.*
+!.env.example
 
 # Playwright local state
 .playwright/
