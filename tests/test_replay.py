@@ -450,3 +450,78 @@ def test_live_replay_with_a_wrong_username_is_a_business_outcome() -> None:
 
     assert result.status is ReplayStatus.BUSINESS_OUTCOME, result.to_contract()
     assert result.code == "invalid_credentials"
+
+
+# -- escalation wiring (section 5, trigger b) ------------------------------
+
+
+def test_an_unclassified_failure_hands_off_to_a_human(tmp_path: Path) -> None:
+    from computer_use.escalation import EscalationManager, RunState
+
+    state = RunState("run_1")
+    manager = EscalationManager(state, serve_console=False, auto_resume=True)
+    surface = FakeSurface(
+        pages=[page(f"{SAUCEDEMO}/somewhere-else.html"), page(f"{SAUCEDEMO}/somewhere-else.html")]
+    )
+
+    result = ReplayEngine(
+        surface, evidence_root=str(tmp_path), backoff_s=0.0, escalation=manager
+    ).run(_capability([_login_step()]), {})
+
+    assert manager.requests, "the failure should have raised an intervention request"
+    assert manager.requests[0].current_step == "click_login"
+    # Resumed, so the run continued past the step and finished.
+    assert result.status is ReplayStatus.SUCCESS
+
+
+def test_resuming_continues_at_the_next_step_not_the_failed_one(tmp_path: Path) -> None:
+    """Re-attempting a step a human just performed by hand would do it twice."""
+    from computer_use.escalation import EscalationManager, RunState
+
+    manager = EscalationManager(RunState("run_1"), serve_console=False, auto_resume=True)
+    steps = [_login_step(), Step(step_id="click_checkout", action=ActionType.CLICK,
+                                 locator=Locator.role_name("button", "Checkout"))]
+    surface = FakeSurface(pages=[page(f"{SAUCEDEMO}/nowhere.html")] * 4)
+
+    ReplayEngine(
+        surface, evidence_root=str(tmp_path), backoff_s=0.0, escalation=manager
+    ).run(_capability(steps), {})
+
+    attempted = [a.locator.tiers[0].name for a in surface.actions if a.locator]
+    assert attempted.count("Login") == 1, "the escalated step must not be retried"
+    assert "Checkout" in attempted, "the run continued at the next step"
+
+
+def test_a_run_nobody_takes_over_still_returns_a_failure(tmp_path: Path) -> None:
+    from computer_use.escalation import EscalationManager, RunState
+
+    manager = EscalationManager(
+        RunState("run_1"), serve_console=False, timeout_s=0.1
+    )
+    surface = FakeSurface(pages=[page(f"{SAUCEDEMO}/nowhere.html")] * 4)
+
+    result = ReplayEngine(
+        surface, evidence_root=str(tmp_path), backoff_s=0.0, escalation=manager
+    ).run(_capability([_login_step()]), {})
+
+    assert result.status is ReplayStatus.FAILURE
+    assert result.step_id == "click_login"
+
+
+def test_escalation_can_be_forced_at_a_named_step_for_a_demo(tmp_path: Path) -> None:
+    from computer_use.escalation import EscalationManager, RunState
+
+    manager = EscalationManager(RunState("run_1"), serve_console=False, auto_resume=True)
+    surface = FakeSurface(pages=[page(f"{SAUCEDEMO}/inventory.html")] * 3)
+
+    result = ReplayEngine(
+        surface,
+        evidence_root=str(tmp_path),
+        backoff_s=0.0,
+        escalation=manager,
+        force_escalate_at_step="click_login",
+    ).run(_capability([_login_step()]), {})
+
+    assert len(manager.requests) == 1
+    assert "forced" in manager.requests[0].reason
+    assert result.status is ReplayStatus.SUCCESS, "a forced handoff is not a failure"

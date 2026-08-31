@@ -114,6 +114,7 @@ class PlaywrightSurface:
         probe_timeout_ms: int = 2000,
         capture_bounding_boxes: bool = True,
         max_nodes: int = 200,
+        remote_debugging_port: int | None = None,
     ) -> None:
         #: Required, with no default. There is no way to construct a surface
         #: without a policy, which is the point: design notes section 6 asks
@@ -125,6 +126,12 @@ class PlaywrightSurface:
         self.probe_timeout_ms = probe_timeout_ms
         self.capture_bounding_boxes = capture_bounding_boxes
         self.max_nodes = max_nodes
+        #: When set, Chromium is launched with a DevTools endpoint so a
+        #: human can attach to the *same* session during an escalation
+        #: (design notes section 5). Off by default: an open debugging
+        #: port is a control channel into the browser, and it should exist
+        #: only when someone means to use it.
+        self.remote_debugging_port = remote_debugging_port
 
         self._playwright: Any = None
         self._browser: Browser | None = None
@@ -137,7 +144,12 @@ class PlaywrightSurface:
     def start(self) -> PlaywrightSurface:
         """Launch a browser and open one page."""
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
+        args = (
+            [f"--remote-debugging-port={self.remote_debugging_port}"]
+            if self.remote_debugging_port
+            else []
+        )
+        self._browser = self._playwright.chromium.launch(headless=self.headless, args=args)
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
         return self
@@ -169,6 +181,18 @@ class PlaywrightSurface:
         if self._context is None:
             raise SurfaceNotStarted("call start() or use the surface as a context manager")
         return self._context
+
+    @property
+    def cdp_url(self) -> str | None:
+        """Where a human can attach to this exact browser, if enabled.
+
+        None rather than an empty string when no port was configured, so a
+        caller can tell "attaching is not available for this run" from "the
+        endpoint is here" without parsing a URL.
+        """
+        if not self.remote_debugging_port:
+            return None
+        return f"http://127.0.0.1:{self.remote_debugging_port}"
 
     # -- perceive ----------------------------------------------------------
 

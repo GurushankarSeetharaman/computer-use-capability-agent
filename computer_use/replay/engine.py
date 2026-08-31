@@ -32,6 +32,7 @@ from computer_use.artifact.models import (
     ValueType,
 )
 from computer_use.artifact.templating import render
+from computer_use.escalation.models import EscalationOutcome, InterventionRequest
 from computer_use.evidence.log import EvidenceLog
 from computer_use.replay.models import ReplayResult
 from computer_use.replay.recovery import BUILT_IN_PATTERNS, RecoveryPattern, find_pattern
@@ -104,12 +105,20 @@ class ReplayEngine:
         max_retries: int = 3,
         backoff_s: float = 0.5,
         patterns: tuple[RecoveryPattern, ...] = BUILT_IN_PATTERNS,
+        escalation: Any | None = None,
+        force_escalate_at_step: str | None = None,
     ) -> None:
         self.surface = surface
         self.evidence_root = evidence_root
         self.max_retries = max_retries
         self.backoff_s = backoff_s
         self.patterns = patterns
+        #: Trigger (b) of design notes section 5: an unclassified failure
+        #: hands off to a human rather than simply ending the run.
+        self.escalation = escalation
+        #: Demonstration hook: force a handoff at a named step so the
+        #: mechanism can be shown without waiting for something to break.
+        self.force_escalate_at_step = force_escalate_at_step
 
     # -- entry point -------------------------------------------------------
 
@@ -167,6 +176,11 @@ class ReplayEngine:
     ) -> ReplayResult | None:
         """Execute one step and classify what happened. None means continue."""
         action = self._build_action(step, values)
+
+        if self.force_escalate_at_step == step.step_id:
+            self._escalate(
+                capability, log, run_id, step.step_id, "forced escalation (demonstration)"
+            )
 
         for attempt in range(self.max_retries + 1):
             result = self.surface.act(action)
@@ -243,6 +257,17 @@ class ReplayEngine:
         log.write(
             "failure", step_id=step.step_id, expected=expected, observed=observed
         )
+
+        # Trigger (b): unclassified failure. If a human takes the session
+        # and hands it back, replay continues at the NEXT step -- never by
+        # retrying the one that escalated, which for an irreversible step a
+        # human just performed by hand would do it twice.
+        if self.escalation is not None:
+            outcome = self._escalate(capability, log, run_id, step.step_id, expected)
+            if outcome is EscalationOutcome.RESUMED:
+                log.write("resumed", step_id=step.step_id, continuing_at="next_step")
+                return None
+
         return ReplayResult.failure(
             run_id=run_id,
             capability_id=capability.capability_id,
@@ -251,6 +276,21 @@ class ReplayEngine:
             observed=observed,
             evidence_path=str(log.path),
         )
+
+    def _escalate(
+        self, capability: Capability, log: EvidenceLog, run_id: str, step_id: str, reason: str
+    ) -> Any:
+        """Hand the live session to a human. The surface is never closed."""
+        snapshot = self.surface.perceive()
+        request = InterventionRequest(
+            run_id=run_id,
+            capability_or_goal=capability.capability_id,
+            current_step=step_id,
+            reason=reason,
+            url=snapshot.url,
+            screenshot_path=snapshot.screenshot_path,
+        )
+        return self.escalation.pause(request, surface=self.surface)
 
     # -- building ----------------------------------------------------------
 

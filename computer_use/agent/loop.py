@@ -37,7 +37,11 @@ from computer_use.agent.tools import (
     Decision,
     interpret,
 )
-from computer_use.escalation import InterventionRequest, request_intervention
+from computer_use.escalation import (
+    EscalationOutcome,
+    InterventionRequest,
+    request_intervention,
+)
 from computer_use.surface.models import ActionResult, SurfaceSnapshot, TierOutcome
 
 #: Named by the operator, not guessed. Sonnet 5 is capable enough to read an
@@ -130,7 +134,12 @@ class DiscoveryAgent:
         max_steps: int = 25,
         timeout_s: float = 300.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        escalation: Any | None = None,
     ) -> None:
+        #: Trigger (a) of design notes section 5. With a manager attached,
+        #: report_stuck hands the live session to a human instead of ending
+        #: the run; without one it stays a terminal outcome.
+        self.escalation = escalation
         self.surface = surface
         self.client = client
         self.model = model
@@ -256,7 +265,11 @@ class DiscoveryAgent:
             return None, f"That tool call was rejected: {exc}. Correct it and try again."
 
         if decision.tool_name in CONTROL_TOOLS:
-            return self._handle_control(recording, decision, index, snapshot), "acknowledged"
+            outcome = self._handle_control(recording, decision, index, snapshot)
+            # True rather than None when a handoff resumed: None means "tell
+            # the model this was an error", and being handed back control is
+            # not an error.
+            return (outcome if outcome is not None else True), "acknowledged"
 
         return self._perform(recording, decision, index, snapshot)
 
@@ -291,7 +304,7 @@ class DiscoveryAgent:
 
     def _handle_control(
         self, recording: Recording, decision: Decision, index: int, snapshot: SurfaceSnapshot
-    ) -> DiscoveryResult:
+    ) -> DiscoveryResult | None:
         """Finish the run because the model said it is finished, or stuck."""
         recording.append(
             RecordedStep(
@@ -315,11 +328,17 @@ class DiscoveryAgent:
             )
 
         recording.stuck_reason = decision.reason
+        request, outcome = self._escalate(recording, decision.reason or "", snapshot, index)
+        if outcome is EscalationOutcome.RESUMED:
+            # A human took the session and handed it back. Re-perceiving
+            # happens at the top of the loop, so the model reasons from
+            # wherever they left the page rather than from where it stuck.
+            recording.stuck_reason = None
+            return None
+
         self._stop(recording, DiscoveryOutcome.STUCK)
         return DiscoveryResult(
-            recording=recording,
-            outcome=DiscoveryOutcome.STUCK,
-            intervention=self._escalate(recording, decision.reason or "", snapshot, index),
+            recording=recording, outcome=DiscoveryOutcome.STUCK, intervention=request
         )
 
     def _handle_no_tool_call(
@@ -348,7 +367,7 @@ class DiscoveryAgent:
                 outcome=DiscoveryOutcome.STUCK,
                 intervention=self._escalate(
                     recording, "model stopped calling tools", None, recording.next_index()
-                ),
+                )[0],
             )
         messages.append(
             {
@@ -367,18 +386,20 @@ class DiscoveryAgent:
         reason: str,
         snapshot: SurfaceSnapshot | None,
         index: int,
-    ) -> InterventionRequest:
-        """Hand off to a human. Control transfer itself lands in a later pass."""
-        return request_intervention(
-            InterventionRequest(
-                run_id=recording.run_id,
-                capability_or_goal=recording.goal,
-                current_step=index,
-                reason=reason,
-                screenshot_path=snapshot.screenshot_path if snapshot else None,
-                url=snapshot.url if snapshot else None,
-            )
+    ) -> tuple[InterventionRequest, EscalationOutcome | None]:
+        """Hand the live session to a human, if one can be reached."""
+        request = InterventionRequest(
+            run_id=recording.run_id,
+            capability_or_goal=recording.goal,
+            current_step=index,
+            reason=reason,
+            screenshot_path=snapshot.screenshot_path if snapshot else None,
+            url=snapshot.url if snapshot else None,
         )
+        if self.escalation is None:
+            request_intervention(request)
+            return request, None
+        return request, self.escalation.pause(request, surface=self.surface)
 
     def _stop(self, recording: Recording, outcome: DiscoveryOutcome) -> DiscoveryResult:
         recording.finish(outcome)

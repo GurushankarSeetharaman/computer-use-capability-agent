@@ -492,3 +492,42 @@ def test_an_ambiguous_failure_tells_the_model_how_to_narrow_it() -> None:
     text = results["content"][0]["content"]
     assert "matched several elements" in text
     assert "text_regex" in text
+
+
+# -- escalation wiring (section 5, trigger a) ------------------------------
+
+
+def test_report_stuck_hands_off_and_the_loop_continues_when_resumed() -> None:
+    """A human took the session and handed it back; the goal is still live."""
+    from computer_use.escalation import EscalationManager, RunState
+
+    manager = EscalationManager(RunState("run_1"), serve_console=False, auto_resume=True)
+    stuck = FakeToolUse(name="report_stuck", input={"reason": "cart link missing"})
+    loop, _ = agent([FakeResponse([stuck]), FakeResponse([DONE_CALL])], escalation=manager)
+
+    result = loop.run("goal", "https://www.saucedemo.com")
+
+    assert manager.requests and manager.requests[0].reason == "cart link missing"
+    assert result.outcome is DiscoveryOutcome.GOAL_MET, "the run continued after resume"
+
+
+def test_report_stuck_stays_terminal_when_nobody_takes_over() -> None:
+    from computer_use.escalation import EscalationManager, RunState
+
+    manager = EscalationManager(RunState("run_1"), serve_console=False, timeout_s=0.1)
+    stuck = FakeToolUse(name="report_stuck", input={"reason": "cart link missing"})
+    loop, _ = agent([FakeResponse([stuck])], escalation=manager)
+
+    result = loop.run("goal", "https://www.saucedemo.com")
+
+    assert result.outcome is DiscoveryOutcome.STUCK
+
+
+def test_without_a_manager_report_stuck_remains_a_terminal_outcome() -> None:
+    stuck = FakeToolUse(name="report_stuck", input={"reason": "cart link missing"})
+    loop, _ = agent([FakeResponse([stuck])])
+
+    result = loop.run("goal", "https://www.saucedemo.com")
+
+    assert result.outcome is DiscoveryOutcome.STUCK
+    assert result.intervention is not None
