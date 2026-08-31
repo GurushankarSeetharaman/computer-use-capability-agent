@@ -1,0 +1,318 @@
+{
+  "capability_id": "saucedemo_add_item_to_cart_checkout",
+  "version": "1.0.0",
+  "name": "Add item to cart and reach checkout review",
+  "description": "Logs in, adds a named item to the cart, and proceeds to the checkout review page, returning the order total.",
+  "target": {
+    "app_id": "saucedemo",
+    "surface_type": "web",
+    "base_url": "https://www.saucedemo.com"
+  },
+  "inputs": [
+    {
+      "name": "username",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "example": "standard_user"
+    },
+    {
+      "name": "password",
+      "type": "string",
+      "required": true,
+      "sensitive": true,
+      "example": null
+    },
+    {
+      "name": "item_name",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "example": "Sauce Labs Backpack"
+    },
+    {
+      "name": "first_name",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "example": "John"
+    },
+    {
+      "name": "last_name",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "example": "Doe"
+    },
+    {
+      "name": "zip_postal_code",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "example": "12345"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "order_total",
+      "type": "string",
+      "source_step": "extract_order_total"
+    }
+  ],
+  "steps": [
+    {
+      "step_id": "type_username",
+      "action": "type",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "textbox",
+          "name": "Username"
+        },
+        "fallbacks": []
+      },
+      "params": {
+        "value": "${username}"
+      },
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "type_password",
+      "action": "type",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "textbox",
+          "name": "Password"
+        },
+        "fallbacks": []
+      },
+      "params": {
+        "value": "${password}"
+      },
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "click_login",
+      "action": "click",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "button",
+          "name": "Login"
+        },
+        "fallbacks": []
+      },
+      "params": {},
+      "checkpoint": {
+        "type": "url_contains",
+        "value": "/inventory.html"
+      },
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [
+        {
+          "match": {
+            "type": "text",
+            "value": "Epic sadface"
+          },
+          "outcome_code": "invalid_credentials",
+          "detail": null
+        }
+      ],
+      "output_name": null
+    },
+    {
+      "step_id": "click_add_to_cart",
+      "action": "click",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "button",
+          "name": "Add to cart"
+        },
+        "fallbacks": [
+          {
+            "strategy": "css",
+            "value": "#add-to-cart-${item_name|slug}"
+          }
+        ]
+      },
+      "params": {},
+      "checkpoint": null,
+      "risk_level": "reversible",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "navigate_cart_html",
+      "action": "navigate",
+      "locator": null,
+      "params": {
+        "url": "https://www.saucedemo.com/cart.html"
+      },
+      "checkpoint": {
+        "type": "url_contains",
+        "value": "/cart.html"
+      },
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "click_checkout",
+      "action": "click",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "button",
+          "name": "Checkout"
+        },
+        "fallbacks": []
+      },
+      "params": {},
+      "checkpoint": {
+        "type": "url_contains",
+        "value": "/checkout-step-one.html"
+      },
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "type_first_name",
+      "action": "type",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "textbox",
+          "name": "First Name"
+        },
+        "fallbacks": []
+      },
+      "params": {
+        "value": "${first_name}"
+      },
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "type_last_name",
+      "action": "type",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "textbox",
+          "name": "Last Name"
+        },
+        "fallbacks": []
+      },
+      "params": {
+        "value": "${last_name}"
+      },
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "type_zip_postal_code",
+      "action": "type",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "textbox",
+          "name": "Zip/Postal Code"
+        },
+        "fallbacks": []
+      },
+      "params": {
+        "value": "${zip_postal_code}"
+      },
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "click_continue",
+      "action": "click",
+      "locator": {
+        "strategy": "role+name",
+        "primary": {
+          "role": "button",
+          "name": "Continue"
+        },
+        "fallbacks": []
+      },
+      "params": {},
+      "checkpoint": {
+        "type": "url_contains",
+        "value": "/checkout-step-two.html"
+      },
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": null
+    },
+    {
+      "step_id": "extract_order_total",
+      "action": "extract",
+      "locator": {
+        "strategy": "text",
+        "primary": {
+          "value": "Total:",
+          "regex": true
+        },
+        "fallbacks": []
+      },
+      "params": {},
+      "checkpoint": null,
+      "risk_level": "safe",
+      "approved": false,
+      "timeout_ms": 5000,
+      "expected_business_outcomes": [],
+      "output_name": "order_total"
+    }
+  ],
+  "success_checkpoint": {
+    "type": "url_contains",
+    "value": "/checkout-step-two.html"
+  },
+  "provenance": {
+    "discovered_by": {
+      "model": "claude-sonnet-5",
+      "run_id": "run_e1bb92213cd9",
+      "timestamp": "2026-08-30T22:24:26.162176Z",
+      "goal": "log in as standard_user/[REDACTED] and add the Sauce Labs Backpack to the cart, then reach the checkout overview page"
+    },
+    "approval_state": "draft"
+  },
+  "redaction_policy": "default_v1"
+}
