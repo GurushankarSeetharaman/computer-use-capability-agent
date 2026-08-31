@@ -166,7 +166,7 @@ class _Surface:
         )
 
 
-def _discovery(tmp_path: Path, goal: str):
+def _discovery(tmp_path: Path, goal: str, credentials: dict | None = None):
     script = [
         _Response(
             [_ToolUse(name="type", input={"role": "textbox", "name": "Password",
@@ -176,7 +176,7 @@ def _discovery(tmp_path: Path, goal: str):
     ]
     surface = _Surface()
     agent = DiscoveryAgent(surface, client=_Client(script), evidence_root=str(tmp_path))
-    return agent.run(goal, "https://www.saucedemo.com")
+    return agent.run(goal, "https://www.saucedemo.com", credentials=credentials)
 
 
 def test_a_discovery_run_writes_a_log_and_a_recording(tmp_path: Path) -> None:
@@ -227,20 +227,64 @@ def test_no_password_appears_in_any_evidence_file(tmp_path: Path) -> None:
             assert PASSWORD not in path.read_text(encoding="utf-8"), path
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN QUESTION: a credential written into the operator's goal text reaches "
-        "log.jsonl before the redactor can learn it. The redactor only learns a secret "
-        "when the model types it into a field that looks sensitive, which happens "
-        "several events after discovery_started is written. Resolving this is a design "
-        "decision about whether credentials belong in goal text at all -- see the "
-        "handover note. Deliberately left failing rather than silently accepted."
-    ),
-)
-def test_a_credential_quoted_in_the_goal_does_not_reach_the_log(tmp_path: Path) -> None:
-    _discovery(tmp_path, f"log in as standard_user/{PASSWORD} and add an item")
+def test_a_credential_never_reaches_the_log_even_via_the_goal(tmp_path: Path) -> None:
+    """Credentials are structured parameters, so ordering cannot betray them.
 
-    log = (tmp_path).rglob("log.jsonl")
-    for path in log:
-        assert PASSWORD not in path.read_text(encoding="utf-8")
+    The redactor is seeded from them before the first line is written, so
+    even a goal that quotes one -- which is now the wrong way to pass it --
+    cannot leak it into discovery_started. This was a strict xfail until
+    credentials stopped travelling in prose.
+    """
+    result = _discovery(
+        tmp_path,
+        f"log in as standard_user/{PASSWORD} and add an item",
+        credentials={"username": "standard_user", "password": PASSWORD},
+    )
+
+    for path in Path(result.evidence_dir).rglob("*"):
+        if path.is_file() and path.suffix in {".json", ".jsonl"}:
+            assert PASSWORD not in path.read_text(encoding="utf-8"), path
+
+
+def test_the_model_is_never_shown_a_credential_value(tmp_path: Path) -> None:
+    """Stronger than redaction: a secret absent from the conversation
+    cannot be echoed back in a summary or retained in a transcript."""
+    script = [
+        _Response(
+            [_ToolUse(name="type", input={"role": "textbox", "name": "Password",
+                                          "value": "${password}"})]
+        ),
+        _Response([_ToolUse(name="done", input={"summary": "ok", "outputs": {}})]),
+    ]
+    surface = _Surface()
+    agent = DiscoveryAgent(surface, client=_Client(script), evidence_root=str(tmp_path))
+    agent.run(
+        "log in and add an item",
+        "https://www.saucedemo.com",
+        credentials={"password": PASSWORD},
+    )
+
+    sent = json.dumps(agent.client.messages.calls, default=str)
+    assert PASSWORD not in sent, "the credential reached the model"
+    assert "${password}" in sent, "the model was told the placeholder"
+
+
+def test_the_placeholder_is_resolved_before_the_action_reaches_the_page(
+    tmp_path: Path,
+) -> None:
+    script = [
+        _Response(
+            [_ToolUse(name="type", input={"role": "textbox", "name": "Password",
+                                          "value": "${password}"})]
+        ),
+        _Response([_ToolUse(name="done", input={"summary": "ok", "outputs": {}})]),
+    ]
+    surface = _Surface()
+    agent = DiscoveryAgent(surface, client=_Client(script), evidence_root=str(tmp_path))
+    result = agent.run(
+        "log in", "https://www.saucedemo.com", credentials={"password": PASSWORD}
+    )
+
+    assert surface.actions[0].value == PASSWORD, "the page got the real value"
+    typed = [s for s in result.recording.steps if s.action is not None][0]
+    assert typed.action.value == "${password}", "the recording kept the placeholder"

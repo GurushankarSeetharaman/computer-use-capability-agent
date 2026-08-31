@@ -10,6 +10,7 @@ are reproducible on demand against the live API.
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -99,6 +100,10 @@ class FakeSurface:
 
 def agent(script: list[FakeResponse], surface: FakeSurface | None = None, **kwargs: Any):
     surface = surface or FakeSurface()
+    # A throwaway evidence root: without one these tests write run
+    # directories into the repository's real evidence/ folder, which then
+    # turns up in the bundle the assignment ships.
+    kwargs.setdefault("evidence_root", tempfile.mkdtemp(prefix="cu-test-"))
     return DiscoveryAgent(surface, client=FakeClient(script), **kwargs), surface
 
 

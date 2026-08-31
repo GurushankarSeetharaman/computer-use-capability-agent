@@ -60,7 +60,7 @@ from computer_use.artifact.models import (
     SurfaceType,
     Target,
 )
-from computer_use.artifact.templating import slugify
+from computer_use.artifact.templating import placeholders, slugify
 from computer_use.surface.models import ActionType, Locator, SurfaceSnapshot
 
 #: Field names whose values are treated as secrets without asking. Matched
@@ -324,6 +324,18 @@ class Compiler:
         field_name = action.locator.tiers[0].name if action.locator else None
         suggested = slugify(field_name or "value").replace("-", "_")
         sensitive = self._looks_sensitive(field_name)
+
+        # Already a parameter. Discovery substitutes credentials at the
+        # moment of typing and records the placeholder, so the recording
+        # never held the literal -- there is nothing here to decide, and
+        # nothing to ask about.
+        existing = placeholders(literal)
+        if existing:
+            for name in existing:
+                self._declare(
+                    inputs, _Parameter(name=name, example=None, sensitive=sensitive)
+                )
+            return literal
 
         if sensitive:
             # Not offered as a choice. A secret cannot stay a literal in the

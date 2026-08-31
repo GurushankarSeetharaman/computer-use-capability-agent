@@ -45,6 +45,7 @@ from computer_use.escalation import (
     request_intervention,
 )
 from computer_use.surface.models import ActionResult, SurfaceSnapshot, TierOutcome
+from computer_use.templating import placeholders, render_partial
 
 #: Named by the operator, not guessed. Sonnet 5 is capable enough to read an
 #: accessibility tree and pick the next action, and discovery is the only
@@ -76,6 +77,11 @@ How to work:
   is not a dead end: narrow it and try again. For text, set `text_regex` and anchor the
   label ('^Total: '). For a control, add a `css_fallback`. Do not give up on a value the
   goal asked for just because the first locator was too broad.
+- Credentials are supplied to the run as named parameters, and you are never shown their
+  values. To fill a credential field, pass the placeholder as the value -- `${username}`,
+  `${password}` -- exactly as written. The runner substitutes the real value at the moment
+  it types, so the secret is never in this conversation. Never invent, guess, or repeat a
+  credential value, and never put one in a summary.
 - Set `risk_level` honestly on every action. Anything that submits, pays, commits or
   deletes is `irreversible` and will stop for human approval.
 
@@ -142,6 +148,7 @@ class DiscoveryAgent:
         verbose: bool = False,
     ) -> None:
         self.evidence_root = evidence_root
+        self._credentials: dict[str, str] = {}
         #: Screenshot every step rather than only failures and handoffs.
         #: Off by default: a screenshot per step on a 25-step run is a lot
         #: of disk for frames nobody looks at, and the ones that matter are
@@ -160,13 +167,29 @@ class DiscoveryAgent:
 
     # -- entry point -------------------------------------------------------
 
-    def run(self, goal: str, target: str, *, run_id: str | None = None) -> DiscoveryResult:
+    def run(
+        self,
+        goal: str,
+        target: str,
+        *,
+        credentials: dict[str, str] | None = None,
+        run_id: str | None = None,
+    ) -> DiscoveryResult:
         """Pursue one goal, then persist the run's evidence whatever happened.
 
-        The persistence is in a finally block on purpose: a run that ends
-        by timing out, or by raising, is exactly the run whose transcript
-        someone needs, and it is the one a return-path-by-return-path
-        approach would drop.
+        Credentials are passed here as structured parameters rather than
+        written into the goal text. Two things follow, and both matter.
+
+        The redactor learns them *before the first line is written*, so a
+        credential cannot reach the log ahead of the step that uses it --
+        which is exactly how one used to escape when the goal string
+        quoted it.
+
+        And the model is never shown the values at all. It refers to them
+        by placeholder; substitution happens at the moment of typing. A
+        secret that never enters the conversation cannot be echoed back in
+        a summary, leaked through a tool argument, or retained in a
+        transcript sent to an API.
         """
         recording = Recording(
             run_id=run_id or f"run_{uuid.uuid4().hex[:12]}",
@@ -174,7 +197,13 @@ class DiscoveryAgent:
             target=target,
             model=self.model,
         )
-        log = EvidenceLog(recording.run_id, root=self.evidence_root)
+        self._credentials = dict(credentials or {})
+        # Seeded before the first write. Ordering is the whole fix.
+        log = EvidenceLog(
+            recording.run_id,
+            root=self.evidence_root,
+            secrets=set(self._credentials.values()),
+        )
         # The run owns the run_id, so it is the only thing that can point
         # the surface at the right screenshot folder.
         if hasattr(self.surface, "screenshot_dir"):
@@ -326,7 +355,10 @@ class DiscoveryAgent:
     ) -> tuple[bool | None, str]:
         """Run one browser action through act(), which enforces policy."""
         assert decision.action is not None
-        result = self.surface.act(decision.action)
+        # Executed with the real value, recorded with the placeholder: the
+        # transcript on disk never holds the secret, and the compiler sees
+        # a parameter rather than a literal it would have to recognise.
+        result = self.surface.act(self._resolve_credentials(decision.action))
 
         if result.blocked:
             outcome = StepOutcome.BLOCKED
@@ -351,6 +383,13 @@ class DiscoveryAgent:
         self._log_step(index, decision, result, outcome, snapshot)
         return (result.succeeded or None), self._describe_result(decision, result)
 
+    def _resolve_credentials(self, action):
+        """Substitute credential values into an action, just before acting."""
+        if not self._credentials or not isinstance(action.value, str):
+            return action
+        filled = render_partial(action.value, self._credentials)
+        return action if filled == action.value else action.model_copy(update={"value": filled})
+
     def _log_step(self, index, decision, result, outcome, snapshot) -> None:
         """One evidence line per step, matching the replay engine's shape.
 
@@ -366,8 +405,13 @@ class DiscoveryAgent:
             if decision.action is not None and decision.action.locator is not None
             else None
         )
-        if looks_sensitive(field):
-            log.learn_secret(decision.action.value if decision.action else None)
+        typed = decision.action.value if decision.action else None
+        # A placeholder is not a secret. Learning "${password}" as one makes
+        # the redactor replace it with [REDACTED] in the recording, which
+        # costs nothing in safety and everything in usefulness: the compiler
+        # would see a redaction token where a parameter should be.
+        if looks_sensitive(field) and typed and not placeholders(typed):
+            log.learn_secret(typed)
         log.write(
             "step",
             step_index=index,

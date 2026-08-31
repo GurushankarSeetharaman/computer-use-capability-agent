@@ -13,6 +13,7 @@ has something to consume in the next build step.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -30,10 +31,22 @@ from computer_use.guardrail import AllowlistConfig  # noqa: E402
 from computer_use.surface import PlaywrightSurface  # noqa: E402
 
 TARGET = "https://www.saucedemo.com"
+#: No credentials in the goal text. They travel as structured parameters,
+#: so the redactor knows them before the first log line is written and the
+#: model never sees their values at all -- it refers to them by
+#: placeholder and the runner substitutes at the moment of typing.
 GOAL = (
-    "log in as standard_user/secret_sauce and add the Sauce Labs Backpack to the cart, "
-    "then reach the checkout overview page"
+    "log in, add the Sauce Labs Backpack to the cart, then reach the checkout "
+    "overview page"
 )
+
+#: Read from the environment so they are not on the command line either.
+#: saucedemo publishes these on its own login page, which is why defaults
+#: are acceptable here and would not be for a real target.
+CREDENTIALS = {
+    "username": os.environ.get("TARGET_USERNAME", "standard_user"),
+    "password": os.environ.get("TARGET_PASSWORD", "secret_sauce"),
+}
 
 
 def main() -> int:
@@ -80,7 +93,7 @@ def main() -> int:
             max_steps=args.max_steps,
         )
         try:
-            result = agent.run(args.goal, TARGET)
+            result = agent.run(args.goal, TARGET, credentials=CREDENTIALS)
         except Exception as error:  # surfaced, not swallowed
             hint = explain_api_error(error)
             if hint is None:
@@ -104,9 +117,15 @@ def main() -> int:
         detail = step.action.describe() if step.action else (step.tool_name or "-")
         print(f"  [{marker}] {detail}" + (f"  <{tier}>" if tier else ""))
 
+    # The run writes its own redacted evidence bundle. This is a copy of
+    # that file, not a fresh serialisation of the in-memory recording --
+    # the in-memory one still holds the literal credential, and writing it
+    # here would undo the redaction the run just did.
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(result.recording.model_dump_json(indent=2), encoding="utf-8")
-    print(f"\nrecording written to {args.out}")
+    source = Path(result.evidence_dir) / "recording.json"
+    args.out.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"\nevidence  : {result.evidence_dir}")
+    print(f"recording : {args.out} (copied from the run's evidence bundle)")
     return 0 if result.succeeded else 1
 
 
