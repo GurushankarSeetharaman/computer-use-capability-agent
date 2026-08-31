@@ -18,9 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-EVIDENCE_ROOT = Path("evidence")
+from computer_use.evidence.redaction import REDACTED, Redactor
 
-REDACTED = "[REDACTED]"
+EVIDENCE_ROOT = Path("evidence")
 
 
 class EvidenceLog:
@@ -38,14 +38,22 @@ class EvidenceLog:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "log.jsonl"
         self.screenshots = self.directory / "screenshots"
-        #: Literal values that must never appear in the log, whatever field
-        #: they turn up in. Held in memory only, for the life of the run.
-        self._secrets = {s for s in (secrets or set()) if s}
+        self.screenshots.mkdir(parents=True, exist_ok=True)
+        #: Known literals plus pattern matching. Held in memory only, for
+        #: the life of the run.
+        self.redactor = Redactor(secrets)
+
+    def learn_secret(self, value: str | None) -> None:
+        """Register a secret discovered mid-run, before anything is written.
+
+        Discovery does not know what the credentials are until the model
+        types them, so the redactor has to be able to grow. Called before
+        the step that used the value is logged, never after.
+        """
+        self.redactor.add(value)
 
     def redact(self, text: str) -> str:
-        for secret in self._secrets:
-            text = text.replace(secret, REDACTED)
-        return text
+        return self.redactor.redact(text)
 
     def write(self, event: str, **fields: Any) -> dict[str, Any]:
         """Append one event. Returns what was written, already redacted."""

@@ -37,6 +37,8 @@ from computer_use.agent.tools import (
     Decision,
     interpret,
 )
+from computer_use.evidence.log import EvidenceLog
+from computer_use.evidence.redaction import looks_sensitive
 from computer_use.escalation import (
     EscalationOutcome,
     InterventionRequest,
@@ -110,6 +112,7 @@ class DiscoveryResult:
     summary: str | None = None
     outputs: dict[str, str] | None = None
     intervention: InterventionRequest | None = None
+    evidence_dir: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -135,7 +138,15 @@ class DiscoveryAgent:
         timeout_s: float = 300.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         escalation: Any | None = None,
+        evidence_root: str = "evidence",
+        verbose: bool = False,
     ) -> None:
+        self.evidence_root = evidence_root
+        #: Screenshot every step rather than only failures and handoffs.
+        #: Off by default: a screenshot per step on a 25-step run is a lot
+        #: of disk for frames nobody looks at, and the ones that matter are
+        #: captured either way.
+        self.verbose = verbose
         #: Trigger (a) of design notes section 5. With a manager attached,
         #: report_stuck hands the live session to a human instead of ending
         #: the run; without one it stays a terminal outcome.
@@ -150,16 +161,53 @@ class DiscoveryAgent:
     # -- entry point -------------------------------------------------------
 
     def run(self, goal: str, target: str, *, run_id: str | None = None) -> DiscoveryResult:
-        """Pursue one goal, recording everything along the way."""
+        """Pursue one goal, then persist the run's evidence whatever happened.
+
+        The persistence is in a finally block on purpose: a run that ends
+        by timing out, or by raising, is exactly the run whose transcript
+        someone needs, and it is the one a return-path-by-return-path
+        approach would drop.
+        """
         recording = Recording(
             run_id=run_id or f"run_{uuid.uuid4().hex[:12]}",
             goal=goal,
             target=target,
             model=self.model,
         )
-        started = time.monotonic()
+        log = EvidenceLog(recording.run_id, root=self.evidence_root)
+        # The run owns the run_id, so it is the only thing that can point
+        # the surface at the right screenshot folder.
+        if hasattr(self.surface, "screenshot_dir"):
+            self.surface.screenshot_dir = log.screenshots
+        log.write("discovery_started", goal=goal, target=target, model=self.model)
+        self._log = log
 
-        snapshot = self.surface.perceive()
+        try:
+            result = self._drive(recording, goal, target, log)
+        finally:
+            self._persist(recording, log)
+        result.evidence_dir = str(log.directory)
+        return result
+
+    def _persist(self, recording: Recording, log: EvidenceLog) -> None:
+        """Write the raw transcript, redacted, next to the run's log.
+
+        Section 6 says a sensitive value is never persisted in plaintext,
+        and the recording is persisted. Redaction happens on the way out
+        rather than as the steps are recorded: the in-memory transcript
+        keeps the literal so the compiler can still recognise it, while
+        nothing with the secret in it ever reaches a disk.
+        """
+        raw = recording.model_dump_json(indent=2)
+        (log.directory / "recording.json").write_text(log.redact(raw), encoding="utf-8")
+        log.write("discovery_finished", outcome=recording.outcome.value if recording.outcome else None)
+
+    def _drive(
+        self, recording: Recording, goal: str, target: str, log: EvidenceLog
+    ) -> DiscoveryResult:
+        """The observe/decide/act loop itself."""
+        started = time.monotonic()
+        snapshot = self.surface.perceive(screenshot=True)
         messages: list[dict[str, Any]] = [
             {"role": "user", "content": self._opening_prompt(goal, target, snapshot)}
         ]
@@ -198,7 +246,7 @@ class DiscoveryAgent:
             # the next turn's before-state. Perceiving twice would double the
             # screenshots in the evidence trail and cost a round trip for a
             # view of the page we already have.
-            snapshot = self.surface.perceive()
+            snapshot = self.surface.perceive(screenshot=self.verbose)
             tool_results[0]["content"] += f"\n\nCurrent page:\n{snapshot.describe()}"
             messages.append({"role": "user", "content": tool_results})
 
@@ -300,7 +348,44 @@ class DiscoveryAgent:
                 error=result.error,
             )
         )
+        self._log_step(index, decision, result, outcome, snapshot)
         return (result.succeeded or None), self._describe_result(decision, result)
+
+    def _log_step(self, index, decision, result, outcome, snapshot) -> None:
+        """One evidence line per step, matching the replay engine's shape.
+
+        A secret is learned *before* the line that used it is written: the
+        model only reveals a credential by typing it, so the redactor has
+        to grow mid-run rather than being fixed up afterwards.
+        """
+        log = getattr(self, "_log", None)
+        if log is None:
+            return
+        field = (
+            decision.action.locator.tiers[0].name
+            if decision.action is not None and decision.action.locator is not None
+            else None
+        )
+        if looks_sensitive(field):
+            log.learn_secret(decision.action.value if decision.action else None)
+        log.write(
+            "step",
+            step_index=index,
+            actor="automation",
+            outcome=outcome.value,
+            tool=decision.tool_name,
+            action=decision.action.type.value if decision.action else None,
+            target=field,
+            locator_tier=result.locator_tier_label,
+            locator_strategy=(
+                result.locator_strategy.value if result.locator_strategy else None
+            ),
+            locator_attempts=[a.model_dump(mode="json") for a in result.locator_attempts],
+            succeeded=result.succeeded,
+            blocked=result.blocked,
+            url=snapshot.url if snapshot else None,
+            error=result.error,
+        )
 
     def _handle_control(
         self, recording: Recording, decision: Decision, index: int, snapshot: SurfaceSnapshot

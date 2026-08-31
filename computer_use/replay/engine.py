@@ -107,7 +107,10 @@ class ReplayEngine:
         patterns: tuple[RecoveryPattern, ...] = BUILT_IN_PATTERNS,
         escalation: Any | None = None,
         force_escalate_at_step: str | None = None,
+        verbose: bool = False,
     ) -> None:
+        #: Screenshot every step rather than only failures and handoffs.
+        self.verbose = verbose
         self.surface = surface
         self.evidence_root = evidence_root
         self.max_retries = max_retries
@@ -139,6 +142,10 @@ class ReplayEngine:
             if resolved.get(name) is not None
         }
         log = EvidenceLog(run_id, root=self.evidence_root, secrets=secrets)
+        # The run owns the run_id, so it is the only thing that can point
+        # the surface at the right screenshot folder.
+        if hasattr(self.surface, "screenshot_dir"):
+            self.surface.screenshot_dir = log.screenshots
         log.write(
             "replay_started",
             capability_id=capability.capability_id,
@@ -184,7 +191,7 @@ class ReplayEngine:
 
         for attempt in range(self.max_retries + 1):
             result = self.surface.act(action)
-            snapshot = self.surface.perceive()
+            snapshot = self.surface.perceive(screenshot=self.verbose)
             passed, observed = self._evaluate(step.checkpoint, snapshot)
             ok = result.succeeded and passed
 
@@ -253,9 +260,17 @@ class ReplayEngine:
             break
 
         expected = self._describe_expectation(step)
-        _, observed = self._evaluate(step.checkpoint, self.surface.perceive())
+        # Always screenshot a failure, whatever --verbose says: this is the
+        # frame someone will actually want, and it is the one moment where
+        # not having it costs a re-run.
+        failure_snapshot = self.surface.perceive(screenshot=True)
+        _, observed = self._evaluate(step.checkpoint, failure_snapshot)
         log.write(
-            "failure", step_id=step.step_id, expected=expected, observed=observed
+            "failure",
+            step_id=step.step_id,
+            expected=expected,
+            observed=observed,
+            screenshot=failure_snapshot.screenshot_path,
         )
 
         # Trigger (b): unclassified failure. If a human takes the session
@@ -281,7 +296,7 @@ class ReplayEngine:
         self, capability: Capability, log: EvidenceLog, run_id: str, step_id: str, reason: str
     ) -> Any:
         """Hand the live session to a human. The surface is never closed."""
-        snapshot = self.surface.perceive()
+        snapshot = self.surface.perceive(screenshot=True)
         request = InterventionRequest(
             run_id=run_id,
             capability_or_goal=capability.capability_id,
@@ -373,7 +388,7 @@ class ReplayEngine:
         """The capability-level post-condition, after the last step."""
         if capability.success_checkpoint is None:
             return None
-        snapshot = self.surface.perceive()
+        snapshot = self.surface.perceive(screenshot=True)
         passed, observed = self._evaluate(capability.success_checkpoint, snapshot)
         if passed:
             return None
