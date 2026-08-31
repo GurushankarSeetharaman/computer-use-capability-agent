@@ -2,16 +2,16 @@
 
 <!-- Headings only. Written by hand, not generated. -->
 
-## 1. Architecture
+## Architecture
 
-## 2. Artifact schema
+## Artifact schema
 
-## 3. Determinism & error handling
+## Determinism & error handling
 
-## 4. Heterogeneity & multi-tenant
+## Heterogeneity & multi-tenant
 
-## 5. Escalation & handoff
+## Escalation & handoff
 
-## 6. Safety
+## Safety
 
-## 7. What was cut, and why
+## Cuts

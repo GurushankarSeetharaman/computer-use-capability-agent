@@ -27,6 +27,16 @@ env/
 artifacts/*
 !artifacts/examples/
 !artifacts/examples/**
+# evidence/ is the submitted deliverable, so the bundle sits at its top
+# level rather than inside an examples/ subfolder -- a reviewer opening
+# /evidence/ should see the runs, not a directory to descend into. Live
+# runs write run_*/ and replay_*/ siblings, which stay ignored.
 evidence/*
-!evidence/examples/
-!evidence/examples/**
+!evidence/README.md
+!evidence/capability.json
+!evidence/discovery/
+!evidence/discovery/**
+!evidence/replay-success/
+!evidence/replay-success/**
+!evidence/replay-business-outcome/
+!evidence/replay-business-outcome/**

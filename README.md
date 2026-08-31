@@ -136,9 +136,10 @@ example of every stage:
 | Path | What it is |
 | --- | --- |
 | [`artifacts/examples/saucedemo_add_item_to_cart_checkout.json`](artifacts/examples/saucedemo_add_item_to_cart_checkout.json) | A compiled capability: typed inputs, outputs, 11 steps with locators, checkpoints and risk levels |
-| [`evidence/examples/discovery/`](evidence/examples/discovery) | A real discovery run — `log.jsonl`, the raw `recording.json`, a screenshot |
-| [`evidence/examples/replay-success/`](evidence/examples/replay-success) | A replay that succeeded |
-| [`evidence/examples/replay-business-outcome/`](evidence/examples/replay-business-outcome) | A replay that hit `invalid_credentials` |
+| [`evidence/discovery/`](evidence/discovery) | A real discovery run — `log.jsonl`, the raw `recording.json`, a screenshot |
+| [`evidence/replay-success/`](evidence/replay-success) | A replay that succeeded |
+| [`evidence/replay-business-outcome/`](evidence/replay-business-outcome) | A replay that hit `invalid_credentials` |
+| [`evidence/README.md`](evidence/README.md) | What each run shows, and what to look for in it |
 
 Things worth looking for while reading:
 
@@ -187,4 +188,6 @@ Two tests drive a real browser and are excluded by default:
 | `config/` | Per-capability allowlist policy |
 | `scripts/` | Manual end-to-end checks, and the script that regenerates the committed example |
 
-Generated `artifacts/` and `evidence/` are gitignored except `examples/`.
+Generated run output is gitignored. `artifacts/examples/` and the `evidence/`
+bundle are committed on purpose, so the repository can be read without
+running anything.
