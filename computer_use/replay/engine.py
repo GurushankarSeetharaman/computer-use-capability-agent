@@ -226,14 +226,22 @@ class ReplayEngine:
             # answer first, then a hiccup worth retrying, then a defect.
             outcome = self._match_business_outcome(step, snapshot)
             if outcome is not None:
+                # Screenshotted regardless of verbosity. Prompt 8 asks for a
+                # frame on failure at minimum; a business outcome is a
+                # terminal result a caller may well dispute, and "show me
+                # what the page said" is the first question asked about one.
+                evidence = self.surface.perceive(screenshot=True)
                 log.write(
-                    "business_outcome", step_id=step.step_id, code=outcome.outcome_code
+                    "business_outcome",
+                    step_id=step.step_id,
+                    code=outcome.outcome_code,
+                    screenshot=evidence.screenshot_path,
                 )
                 return ReplayResult.business_outcome(
                     run_id=run_id,
                     capability_id=capability.capability_id,
                     code=outcome.outcome_code,
-                    detail=outcome.detail or observed,
+                    detail=outcome.detail or self._outcome_detail(outcome, snapshot),
                 )
 
             if result.blocked:
@@ -370,6 +378,22 @@ class ReplayEngine:
             present = any(node.name == checkpoint.value for node in snapshot.nodes)
             return present, _summarise(text)
         return False, _summarise(text)
+
+    @staticmethod
+    def _outcome_detail(outcome, snapshot: SurfaceSnapshot) -> str:
+        """What the page actually said, not merely where it said it.
+
+        A caller handling `invalid_credentials` wants the message the
+        application produced; the URL is the least informative thing on
+        screen at that moment.
+        """
+        if outcome.match.type is not MatchType.TEXT:
+            return snapshot.url
+        for node in snapshot.nodes:
+            for part in (node.name, node.value):
+                if part and outcome.match.value in part:
+                    return part.strip()
+        return snapshot.url
 
     @staticmethod
     def _match_business_outcome(step: Step, snapshot: SurfaceSnapshot):
